@@ -335,7 +335,8 @@
       link.href = href;
       link.innerHTML = icon(iconFor(href));
       link.append(top.textContent.trim());
-      if (active) link.setAttribute('aria-current', 'page');
+      // 子ページを開いているときの親項目は「今のページ」ではないので true にする（page は子のリンクに付く）
+      if (active) link.setAttribute('aria-current', href === path ? 'page' : 'true');
       item.append(link);
 
       if (active && subs.length) {
@@ -407,9 +408,12 @@
       --mfx-hover: #f1f3f6;
       --mfx-border: #e6e8ec;
       --mfx-text: #1f2328;
-      --mfx-muted: #6b7280;
+      /* muted は hover 背景の上でも 4.5:1 を保つ濃さ。accent は白文字・淡い背景の上の文字には明るすぎるので、文字用に accent-text を分ける */
+      --mfx-muted: #656c79;
       --mfx-accent: #f26b1d;
       --mfx-accent-soft: #fff1e8;
+      --mfx-accent-text: #c2410c;
+      --mfx-on-accent: #fff;
       --mfx-plus: #1d4ed8;
       --mfx-minus: #dc2626;
       --mfx-warn-bg: #fff7e6;
@@ -428,6 +432,8 @@
       --mfx-muted: #9aa3b2;
       --mfx-accent: #ff8a3d;
       --mfx-accent-soft: rgba(255,138,61,.14);
+      --mfx-accent-text: #ff8a3d;
+      --mfx-on-accent: #1f2328;
       --mfx-plus: #60a5fa;
       --mfx-minus: #f87171;
       --mfx-warn-bg: rgba(245,158,11,.14);
@@ -462,7 +468,7 @@
     }
     .mfx-nav a:hover { background: var(--mfx-hover); }
     .mfx-nav svg { width: 18px; height: 18px; flex: none; }
-    .mfx-nav .is-active > a { background: var(--mfx-accent-soft); color: var(--mfx-accent) !important; font-weight: 600; }
+    .mfx-nav .is-active > a { background: var(--mfx-accent-soft); color: var(--mfx-accent-text) !important; font-weight: 600; }
     .mfx-subnav { margin: 4px 0 8px; padding-left: 28px; }
     .mfx-subnav a { padding: 6px 10px; font-size: 13px; color: var(--mfx-muted) !important; }
     .mfx-subnav a.is-current { color: var(--mfx-text) !important; font-weight: 600; background: var(--mfx-hover); }
@@ -511,8 +517,10 @@
       border: 1px solid var(--mfx-border) !important; border-radius: 8px !important;
     }
     .btn:hover { border-color: var(--mfx-muted) !important; }
+    /* 上の背景色の上書きで、ボタングループの選択中（.active）の見分けが消えるので付け直す */
+    .btn.active { background-color: var(--mfx-accent-soft) !important; border-color: var(--mfx-accent) !important; color: var(--mfx-accent-text) !important; }
     /* .btn:hover の灰色の枠に負けないよう、.btn と重ねて詳細度を上げる */
-    .btn.btn-warning, .btn.btn-primary { background-color: var(--mfx-accent) !important; border-color: var(--mfx-accent) !important; color: #fff !important; }
+    .btn.btn-warning, .btn.btn-primary { background-color: var(--mfx-accent) !important; border-color: var(--mfx-accent) !important; color: var(--mfx-on-accent) !important; }
     .btn.btn-success { background-color: #16a34a !important; border-color: #16a34a !important; color: #fff !important; }
     .btn.btn-danger { background-color: #dc2626 !important; border-color: #dc2626 !important; color: #fff !important; }
     .btn-warning:hover, .btn-primary:hover, .btn-success:hover, .btn-danger:hover { filter: brightness(.95); }
@@ -520,12 +528,16 @@
       border-radius: 8px !important; border: 1px solid var(--mfx-border) !important; box-shadow: none !important;
       background-color: var(--mfx-surface) !important; color: var(--mfx-text) !important;
     }
-    input:focus, select:focus, textarea:focus, .btn:focus-visible, .mfx-own button:focus-visible, .mfx-nav a:focus-visible {
+    input:disabled, select:disabled, textarea:disabled { background-color: var(--mfx-surface-2) !important; color: var(--mfx-muted) !important; }
+    input:focus, select:focus, textarea:focus, .btn:focus-visible, .mfx-own button:focus-visible, .mfx-own a:focus-visible {
       outline: 2px solid var(--mfx-accent) !important; outline-offset: 1px;
     }
     .dropdown-menu { border-radius: 10px !important; border: 1px solid var(--mfx-border) !important; box-shadow: var(--mfx-shadow) !important; background: var(--mfx-surface) !important; }
     .dropdown-menu a { color: var(--mfx-text) !important; }
-    .dropdown-menu a:hover, .dropdown-menu a:focus { background: var(--mfx-hover) !important; background-image: none !important; }
+    /* Bootstrap はサブメニューを開いている親項目・選択中の項目を青地に白文字にするので、上の文字色のままだと読みにくい */
+    .dropdown-menu a:hover, .dropdown-menu a:focus, .dropdown-submenu:hover > a { background: var(--mfx-hover) !important; background-image: none !important; }
+    .dropdown-menu .active > a { background: var(--mfx-accent-soft) !important; color: var(--mfx-accent-text) !important; }
+    .dropdown-menu .disabled > a { color: var(--mfx-muted) !important; }
 
     /* 広告の列を消して本文を広げる */
     .mf-col-custom-ad, [class*="tag-manager-ad"], [id^="div-gpt-ad"], iframe[id^="google_ads"] { display: none !important; }
