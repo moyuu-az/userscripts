@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const {
   normalize, matchesQuery, isTypingTarget, isOwnMutation,
   resolveTheme, nextThemePref, parseRgb, luminance, classifyBg, classifyFg, isLightBorder, hasLightBorder,
-  parseAmount, formatAmount,
+  parseAmount, formatAmount, countUp,
 } = require('../moneyforward-me.user.js');
 
 test('normalize: 全角英数・カンマ・連続空白をそろえる', () => {
@@ -198,4 +198,91 @@ test('formatAmount: カウントアップの途中の値を MF と同じ書式�
   assert.equal(formatAmount(-214320), '-214,320円');
   assert.equal(formatAmount(1234.6), '1,235円');
   assert.equal(formatAmount(-0.4), '0円');
+});
+
+// countUp はブラウザの API を呼ぶので、使う分だけを差し替えて、フレームを手で進める
+function animationEnv(t, { reduced = false, hidden = false } = {}) {
+  const frames = [];
+  globalThis.window = { matchMedia: () => ({ matches: reduced }) };
+  globalThis.document = { hidden };
+  globalThis.requestAnimationFrame = (cb) => frames.push(cb);
+  t.after(() => {
+    delete globalThis.window;
+    delete globalThis.document;
+    delete globalThis.requestAnimationFrame;
+  });
+  const start = performance.now();
+  // ms は countUp を呼んだ時点からの経過時間。負の値は、フレームの時刻が呼んだ時点より前になる場合
+  const tick = (ms) => frames.splice(0).forEach((cb) => cb(start + ms));
+  return { frames, tick };
+}
+
+const amountEl = (text = '') => ({ dataset: {}, textContent: text });
+
+test('countUp: 今の表示から目標の値まで動かし、最後は MF の文字そのものにする', (t) => {
+  const { frames, tick } = animationEnv(t);
+  const el = amountEl('');
+  countUp(el, '1,000,000円');
+  assert.equal(el.textContent, '');
+  tick(300);
+  const mid = parseAmount(el.textContent);
+  assert.ok(mid > 0 && mid < 1000000, el.textContent);
+  tick(10000);
+  assert.equal(el.textContent, '1,000,000円');
+  assert.equal(frames.length, 0);
+});
+
+test('countUp: フレームの時刻が呼んだ時点より前でも、元の値の外へ飛び出さない', (t) => {
+  // rAF に渡る時刻はフレームの始まりなので、rAF の外（読み込み直後の refresh）から呼ぶと、最初のフレームの時刻が呼んだ時点より前になる。Chrome で最大 8ms ほど前になった
+  const { tick } = animationEnv(t);
+  const el = amountEl('');
+  countUp(el, '1,000,000円');
+  tick(-8);
+  assert.equal(el.textContent, '0円');
+});
+
+test('countUp: 同じ目標値で呼び直しても、動いている途中のアニメーションを始め直さない', (t) => {
+  const { frames, tick } = animationEnv(t);
+  const el = amountEl('');
+  countUp(el, '1,000,000円');
+  tick(300);
+  const mid = el.textContent;
+  countUp(el, '1,000,000円');
+  assert.equal(el.textContent, mid);
+  assert.equal(frames.length, 1);
+});
+
+test('countUp: 途中で目標値が変わったら古いアニメーションを止め、新しい値で終わる', (t) => {
+  const { frames, tick } = animationEnv(t);
+  const el = amountEl('');
+  countUp(el, '1,000,000円');
+  tick(300);
+  const mid = parseAmount(el.textContent);
+  countUp(el, '-500円');
+  assert.equal(frames.length, 2);
+  tick(300);
+  assert.equal(frames.length, 1); // 古いほうは止まり、次のフレームを頼まない
+  const now = parseAmount(el.textContent);
+  assert.ok(now < mid && now > -500, el.textContent);
+  tick(10000);
+  assert.equal(el.textContent, '-500円');
+});
+
+test('countUp: 動きを減らす設定・裏のタブ・金額でない文字・同じ値のときは、すぐ入れる', (t) => {
+  for (const opts of [{ reduced: true }, { hidden: true }]) {
+    const { frames } = animationEnv(t, opts);
+    const el = amountEl('');
+    countUp(el, '1,000円');
+    assert.equal(el.textContent, '1,000円');
+    assert.equal(frames.length, 0);
+  }
+  const { frames } = animationEnv(t);
+  const el = amountEl('1,000円');
+  countUp(el, '---');
+  assert.equal(el.textContent, '---');
+  countUp(el, '1,000円');
+  assert.equal(frames.length, 1); // 「---」は 0 として、そこから動かす
+  const same = amountEl('1,000円');
+  countUp(same, '1,000円');
+  assert.equal(frames.length, 1);
 });

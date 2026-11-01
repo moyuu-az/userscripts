@@ -188,7 +188,9 @@
     const start = performance.now();
     const step = (now) => {
       if (el.dataset.mfxTarget !== text) return; // 途中で月が変わった
-      const t = Math.min((now - start) / 600, 1);
+      // rAF に渡る時刻はフレームの始まり（vsync）なので、読み込み直後の refresh など rAF の外から呼ぶと start より前になることがある。
+      // 負のまま計算すると元の値の外に飛ぶ（0 から増やすときに一瞬マイナスが出る）
+      const t = Math.min(Math.max((now - start) / 600, 0), 1);
       setText(el, t === 1 ? text : formatAmount(from + (to - from) * (1 - (1 - t) ** 3)));
       if (t < 1) requestAnimationFrame(step);
     };
@@ -655,7 +657,8 @@
       @keyframes mfx-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
       @keyframes mfx-slide { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
       .container-large #main-container,
-      body:has(#home) :is(.home-col-assets #user-info, .home-col-assets section.accounts, #js-mf-main-content > div > *),
+      /* :is() だと中の #user-info の詳細度になり、下の section.accounts の animation-delay が負けるので :where() にする */
+      body:has(#home) :where(.home-col-assets #user-info, .home-col-assets section.accounts, #js-mf-main-content > div > *),
       .mfx-stat, .mfx-cal-open #kakeibo .mf-col-custom-body {
         animation: mfx-rise .5s cubic-bezier(.2, .7, .2, 1) backwards;
       }
@@ -735,7 +738,7 @@
     module.exports = {
       normalize, matchesQuery, isTypingTarget, isOwnMutation,
       resolveTheme, nextThemePref, parseRgb, luminance, classifyBg, classifyFg, isLightBorder, hasLightBorder,
-      parseAmount, formatAmount,
+      parseAmount, formatAmount, countUp,
     };
   } else {
     main();
