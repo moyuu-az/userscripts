@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   normalize, matchesQuery, isTypingTarget, isOwnMutation,
-  resolveTheme, nextThemePref, parseRgb, luminance, classifyBg, classifyFg, isLightBorder,
+  resolveTheme, nextThemePref, parseRgb, luminance, classifyBg, classifyFg, isLightBorder, hasLightBorder,
 } = require('../moneyforward-me.user.js');
 
 test('normalize: 全角英数・カンマ・連続空白をそろえる', () => {
@@ -157,4 +157,27 @@ test('isLightBorder: 明るい枠線だけを置き換える', () => {
   assert.equal(isLightBorder(parseRgb('rgb(51, 51, 51)')), false);
   assert.equal(isLightBorder(parseRgb('rgba(255, 255, 255, 0)')), false);
   assert.equal(isLightBorder(null), false);
+});
+
+// getComputedStyle の戻り値の代わり。指定しない辺は幅 0・色は文字色（currentColor）にする
+function borders(sides, textColor = 'rgb(230, 232, 236)') {
+  const cs = {};
+  for (const side of ['Top', 'Right', 'Bottom', 'Left']) {
+    cs[`border${side}Width`] = sides[side]?.[0] ?? '0px';
+    cs[`border${side}Color`] = sides[side]?.[1] ?? textColor;
+  }
+  return cs;
+}
+
+test('hasLightBorder: 幅のある辺が明るい色なら置き換える。右の辺だけでも拾う', () => {
+  assert.equal(hasLightBorder(borders({ Top: ['1px', 'rgb(221, 221, 221)'], Right: ['1px', 'rgb(221, 221, 221)'], Bottom: ['1px', 'rgb(221, 221, 221)'], Left: ['1px', 'rgb(221, 221, 221)'] })), true);
+  assert.equal(hasLightBorder(borders({ Right: ['1px', 'rgb(221, 221, 221)'] }, 'rgb(51, 51, 51)')), true);
+  assert.equal(hasLightBorder(borders({ Bottom: ['0.5px', 'rgb(221, 221, 221)'] }, 'rgb(51, 51, 51)')), true);
+});
+
+test('hasLightBorder: 幅 0 の辺の色（明るい文字色）では置き換えない', () => {
+  // 見出しの左のアクセント線（border: 0 のあとに border-left だけ指定）。ダークモードでは文字色が明るい
+  assert.equal(hasLightBorder(borders({ Left: ['4px', 'rgb(255, 138, 61)'] })), false);
+  assert.equal(hasLightBorder(borders({ Bottom: ['1px', 'rgb(42, 48, 60)'] })), false);
+  assert.equal(hasLightBorder(borders({})), false);
 });

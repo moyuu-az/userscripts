@@ -100,6 +100,14 @@
     return !!c && c.a > 0 && luminance(c) > 0.5;
   }
 
+  // 幅のある辺の色だけを見る。幅 0 の辺の色は文字色（currentColor）なので、明るい文字の要素では
+  // 見出しの左のアクセント線のような色付きの線まで灰色に塗り替えてしまう
+  function hasLightBorder(cs) {
+    return ['Top', 'Right', 'Bottom', 'Left'].some(
+      (side) => parseFloat(cs[`border${side}Width`]) > 0 && isLightBorder(parseRgb(cs[`border${side}Color`])),
+    );
+  }
+
   // --- ページの処理 ---
 
   // カテゴリのセルは全カテゴリの選択肢（.dropdown-menu）を中に持つので、それを除いた表示中の文字だけを読む。
@@ -240,7 +248,8 @@
   const darkened = new WeakSet();
 
   function darkify(root) {
-    if (!root || root.nodeType !== 1) return;
+    // 足されてすぐ外された要素は getComputedStyle が空を返す。処理済みにすると付け直されたときに直せなくなる
+    if (!root || root.nodeType !== 1 || !root.isConnected) return;
     const targets = [root, ...root.querySelectorAll('*')];
     // 読み取りをまとめてから書き込み、書き込みのたびにスタイルの再計算が走らないようにする
     const plans = [];
@@ -255,9 +264,7 @@
       // 親と同じ文字色は受け継いだだけのことが多く、親を直せば変わる。全要素にクラスを付けると重いので後回しにする
       const inherited = fg && el.parentElement && getComputedStyle(el.parentElement).color === cs.color;
       if (inherited) sameAsParent.push(el);
-      const bordered =
-        (parseFloat(cs.borderTopWidth) || parseFloat(cs.borderBottomWidth) || parseFloat(cs.borderLeftWidth) || parseFloat(cs.borderRightWidth)) &&
-        (isLightBorder(parseRgb(cs.borderTopColor)) || isLightBorder(parseRgb(cs.borderBottomColor)) || isLightBorder(parseRgb(cs.borderLeftColor)));
+      const bordered = hasLightBorder(cs);
       if (bg || (fg && !inherited) || bordered) plans.push({ el, bg, fg: inherited ? null : fg, bordered });
     }
     const apply = ({ el, bg, fg, bordered }) => {
@@ -655,7 +662,7 @@
   if (typeof module !== 'undefined') {
     module.exports = {
       normalize, matchesQuery, isTypingTarget, isOwnMutation,
-      resolveTheme, nextThemePref, parseRgb, luminance, classifyBg, classifyFg, isLightBorder,
+      resolveTheme, nextThemePref, parseRgb, luminance, classifyBg, classifyFg, isLightBorder, hasLightBorder,
     };
   } else {
     main();
