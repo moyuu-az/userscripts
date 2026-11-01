@@ -186,8 +186,10 @@
       /* 広告の列を消して本文を広げる */
       .mf-col-custom-ad, [class*="tag-manager-ad"], [id^="div-gpt-ad"], iframe[id^="google_ads"] { display: none !important; }
       .mf-col-custom-content-body { width: 100% !important; float: none !important; }
-      /* ホームは左の資産列が float なので、中央の列を残りの幅いっぱいに広げる。左との間隔は元の margin-left 30px を padding で保つ */
-      .mf-col-custom-home { float: none !important; width: auto !important; overflow: hidden; margin-left: 0 !important; padding-left: 30px; }
+      /* ホームは左の資産列が float なので、中央の列を BFC にして残りの幅いっぱいに広げる。
+         overflow: hidden だと列からはみ出すメニューやツールチップが切れ、中の sticky も効かなくなるので flow-root を使う。
+         float の横の BFC では margin-left が float に食われるので、元の 30px の間隔は padding で保つ */
+      .mf-col-custom-home { float: none !important; width: auto !important; display: flow-root; margin-left: 0 !important; padding-left: 30px; }
 
       /* このスクリプトが足す要素 */
       tr.mfx-hidden { display: none; }
