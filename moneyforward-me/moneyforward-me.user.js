@@ -451,6 +451,8 @@
       o.cutout = data.datasets.length > 1 ? '42%' : '64%';
       // MF の円グラフは扇形の中に割合を白字で書くが、ドーナツの細い輪には収まらない。値はツールチップと横の表で読める
       if (plugins.pieDataLabels) plugins.pieDataLabels.enabled = false;
+      // MF の centerText（穴の文字）は今の画面では使われていないが、指定されると合計の文字と重なる
+      if (plugins.centerText) plugins.centerText = false;
     } else {
       o.interaction = { mode: 'index', intersect: false };
       tip.filter = (item) => Number(item.raw) !== 0 && item.raw != null;

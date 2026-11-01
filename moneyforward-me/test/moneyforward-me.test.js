@@ -541,7 +541,7 @@ test('styleChart: 円グラフはドーナツにし、MF の系列ごとの cuto
   const chart = {
     config: {
       type: 'pie',
-      options: { plugins: { pieDataLabels: { enabled: true } } },
+      options: { plugins: { pieDataLabels: { enabled: true }, centerText: { text: '3円' } } },
       data: { datasets: [{ data: [1, 2], backgroundColor: ['#fff', '#000'] }, { data: [3], cutout: 0, backgroundColor: ['#f00'] }] },
     },
   };
@@ -551,6 +551,7 @@ test('styleChart: 円グラフはドーナツにし、MF の系列ごとの cuto
   assert.equal(options.cutout, '42%');
   assert.equal('cutout' in data.datasets[1], false);
   assert.equal(options.plugins.pieDataLabels.enabled, false);
+  assert.equal(options.plugins.centerText, false); // 穴の合計と重ならないよう、MF の中央の文字は止める
   assert.deepEqual(data.datasets[0].backgroundColor, ['rgba(255, 255, 255, 1)', 'rgba(0, 0, 0, 1)']);
   assert.equal(data.datasets.some((ds) => ds.mfxNet), false);
 });
