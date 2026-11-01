@@ -204,6 +204,13 @@ test('parseAmount: 月次収支の「1,234円」とカレンダーの「-1,234�
   assert.equal(parseAmount('1,234円円'), null);
 });
 
+test('parseAmount: 数字を含まないカンマだけの文字は 0 と読まず null にする', () => {
+  assert.equal(parseAmount(','), null);
+  assert.equal(parseAmount('-,'), null);
+  assert.equal(parseAmount(',円'), null);
+  assert.equal(parseAmount('0'), 0);
+});
+
 test('institutionOptions: 件数の多い順に並べ、同数は名前順。空の名前は数えない', () => {
   assert.deepEqual(institutionOptions(['B銀行', 'Aカード', 'B銀行', '', 'C銀行']), [
     { name: 'B銀行', count: 2 },

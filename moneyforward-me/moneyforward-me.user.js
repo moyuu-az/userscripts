@@ -203,7 +203,7 @@
 
   // 月次収支の「1,234円」とカレンダーの「-1,234」の両方を読む
   function parseAmount(text) {
-    const m = /^([-−]?)([\d,]+)円?$/.exec(text.trim());
+    const m = /^([-−]?)(\d[\d,]*)円?$/.exec(text.trim());
     return m ? (m[1] ? -1 : 1) * Number(m[2].replace(/,/g, '')) : null;
   }
 
