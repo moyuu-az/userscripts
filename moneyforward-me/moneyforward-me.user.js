@@ -296,9 +296,7 @@
       if (/^(SCRIPT|STYLE|NOSCRIPT|IMG|CANVAS|IFRAME|BR|svg)$/i.test(el.tagName) || el.closest('svg, .mfx-own')) continue;
       const cs = getComputedStyle(el);
       const bg = classifyBg(parseRgb(cs.backgroundColor));
-      // .btn の文字色はこのスクリプトの CSS が地の色に合わせて決めている。読むと、オレンジの地の上の濃い文字を
-      // 「暗い文字」と見なして灰色に変えてしまう
-      const fg = el.matches('.btn') ? null : classifyFg(parseRgb(cs.color));
+      const fg = classifyFg(parseRgb(cs.color));
       // 親と同じ文字色は受け継いだだけのことが多く、親を直せば変わる。全要素にクラスを付けると重いので後回しにする
       const inherited = fg && el.parentElement && getComputedStyle(el.parentElement).color === cs.color;
       if (inherited) sameAsParent.push(el);
@@ -576,7 +574,7 @@
     html[data-mfx-theme="dark"] .btn.btn-warning, html[data-mfx-theme="dark"] .btn.btn-primary {
       background-color: var(--mfx-accent-soft) !important; border-color: rgba(255,138,61,.45) !important; color: var(--mfx-accent-text) !important;
     }
-    html[data-mfx-theme="dark"] .btn.btn-warning:hover, html[data-mfx-theme="dark"] .btn.btn-primary:hover { background-color: rgba(255,138,61,.24) !important; filter: none; }
+    html[data-mfx-theme="dark"] .btn.btn-warning:hover, html[data-mfx-theme="dark"] .btn.btn-primary:hover { background-color: rgba(255,138,61,.18) !important; filter: none; }
     /* 「集計期間を変更」「手入力」: 古いメモ帳の画像を隠し、MF がインラインで指定した幅と余白を上書きして高さをそろえる */
     .cf-new-btn img { display: none !important; }
     .cf-new-btn {

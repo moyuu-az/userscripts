@@ -153,6 +153,14 @@ test('classifyFg: 明るい文字（白い文字や明るい色）と透明は�
   assert.equal(classifyFg(parseRgb('rgba(0, 0, 0, 0)')), null);
 });
 
+// darkify は .btn の文字色も読むので、ダークのボタンの文字色が暗いと灰色に変えられる（以前の #1f2328 がそうだった）
+test('classifyFg: ダークのボタンの文字色（本文色・アクセント・白）はそのまま', () => {
+  assert.equal(classifyFg(parseRgb('rgb(230, 232, 236)')), null);
+  assert.equal(classifyFg(parseRgb('rgb(255, 138, 61)')), null);
+  assert.equal(classifyFg(parseRgb('rgb(255, 255, 255)')), null);
+  assert.equal(classifyFg(parseRgb('rgb(31, 35, 40)'))?.cls, 'mfx-dk-fgt');
+});
+
 test('isLightBorder: 明るい枠線だけを置き換える', () => {
   assert.equal(isLightBorder(parseRgb('rgb(221, 221, 221)')), true);
   assert.equal(isLightBorder(parseRgb('rgb(51, 51, 51)')), false);
