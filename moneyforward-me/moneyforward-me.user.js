@@ -331,6 +331,18 @@
     if (document.documentElement.classList.contains('mfx-cal-open')) paintSpendBars();
   }
 
+  // キー操作の振り分け。IME の変換中（Safari は確定の直後も keyCode 229）の Esc は変換の取り消しなので、検索語を消さない。
+  // 「/」は配列によって Shift と一緒に打つ（ドイツ語配列など）ので、Shift を見るのは ← → だけにする
+  function keyAction(e, filter) {
+    if (e.isComposing || e.keyCode === 229 || e.altKey || e.ctrlKey || e.metaKey) return null;
+    // 検索欄の中の Esc は語を消して全件に戻す（空なら欄から抜ける）
+    if (e.key === 'Escape') return filter && e.target === filter ? (filter.value ? 'clear' : 'blur') : null;
+    if (isTypingTarget(e.target)) return null;
+    if (e.key === '/') return filter ? 'focus' : null;
+    if (e.shiftKey) return null;
+    return e.key === 'ArrowLeft' ? 'prev' : e.key === 'ArrowRight' ? 'next' : null;
+  }
+
   // --- 収支内訳の表: 割合の列に、いちばん大きい項目を全幅とした棒を敷く ---
 
   function ratiosToMax(values) {
@@ -465,7 +477,9 @@
       if (netDs) netDs.data = net ?? [];
     }
 
-    const pair = data.datasets.length === 2 && data.datasets.some((ds) => ds.label === '収入') && data.datasets.some((ds) => ds.label === '支出');
+    // 収支の線を足した後なので、MF の系列だけで数える
+    const own = data.datasets.filter((ds) => !ds.mfxNet);
+    const pair = own.length === 2 && own.some((ds) => ds.label === '収入') && own.some((ds) => ds.label === '支出');
     data.datasets.forEach((ds, di) => {
       if (ds.mfxNet) {
         Object.assign(ds, {
@@ -530,6 +544,19 @@
     ctx.restore();
   }
 
+  // MF の位置決め besideBars は棒の幅から位置を出すので、収支の線の点（幅なし）が混ざると NaN になって表示されない。
+  // MF は Chart.js を読み込んだ後で besideBars を足すので、document-start で登録した時点にはまだない。
+  // ツールチップが位置を求めるのはマウスの操作（beforeEvent の後）なので、そのたびに確かめて一度だけ包む
+  function wrapBesideBars(positioners) {
+    const beside = positioners?.besideBars;
+    if (typeof beside !== 'function' || beside.mfxWrapped) return;
+    const wrapped = function (items, pos) {
+      return beside.call(this, items.filter((item) => Number.isFinite(item.element?.width)), pos);
+    };
+    wrapped.mfxWrapped = true;
+    positioners.besideBars = wrapped;
+  }
+
   const CHART_FONT = 'system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif';
   let chartsHooked = false;
 
@@ -538,15 +565,12 @@
     const Chart = window.Chart;
     if (chartsHooked || typeof Chart?.register !== 'function' || !Chart.instances) return;
     chartsHooked = true;
-    // MF の位置決め besideBars は棒の幅から位置を出すので、収支の線の点（幅なし）が混ざると NaN になって表示されない
-    const beside = Chart.Tooltip?.positioners?.besideBars;
-    if (beside) {
-      Chart.Tooltip.positioners.besideBars = function (items, pos) {
-        return beside.call(this, items.filter((item) => Number.isFinite(item.element.width)), pos);
-      };
-    }
-    // beforeInit で最初の描画から反映する。beforeUpdate はデータの差し替え（月の切り替え）で増えた系列と収支の線のため
-    Chart.register({ id: 'mfx', beforeInit: styleChart, beforeUpdate: styleChart, afterDraw: drawDonutTotal });
+    // beforeInit で最初の描画から反映する。beforeUpdate はデータの差し替え（月の切り替え）で増えた系列と収支の線のため。
+    // 合計の文字は afterDatasetsDraw で書く。afterDraw だとツールチップ（Tooltip の afterDraw）の上に重なる
+    Chart.register({
+      id: 'mfx', beforeInit: styleChart, beforeUpdate: styleChart, afterDatasetsDraw: drawDonutTotal,
+      beforeEvent: () => wrapBesideBars(Chart.Tooltip?.positioners),
+    });
     restyleCharts();
   }
 
@@ -1072,23 +1096,16 @@
     applyTheme();
 
     document.addEventListener('keydown', (e) => {
-      if (e.altKey || e.ctrlKey || e.metaKey) return;
       const filter = document.querySelector('#mfx-filter');
-      // 検索欄の中の Esc は語を消して全件に戻す（空なら欄から抜ける）
-      if (e.key === 'Escape' && filter && e.target === filter) {
-        if (filter.value) {
-          filter.value = '';
-          refresh();
-        } else filter.blur();
-        return;
-      }
-      if (e.shiftKey || isTypingTarget(e.target)) return;
-      if (e.key === '/' && filter) {
+      const action = keyAction(e, filter);
+      if (action === 'clear') {
+        filter.value = '';
+        refresh();
+      } else if (action === 'blur') filter.blur();
+      else if (action === 'focus') {
         e.preventDefault();
         filter.focus();
-      } else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && clickMonthButton(e.key === 'ArrowLeft' ? -1 : 1)) {
-        e.preventDefault();
-      }
+      } else if (action && clickMonthButton(action === 'prev' ? -1 : 1)) e.preventDefault();
     });
 
     // 月の切り替えやカテゴリ編集で表が Ajax で差し替わるので、そのたびに付け直す。ダークモード中は足された要素の色も直す
@@ -1136,6 +1153,7 @@
       resolveTheme, nextThemePref, parseRgb, luminance, classifyBg, classifyFg, isLightBorder, hasLightBorder,
       parseAmount, formatAmount, countUp, institutionOptions, spendLevels,
       ratiosToMax, formatYenCompact, shortDateLabel, parseColor, seriesColor, isStackTop, netSeries,
+      keyAction, wrapBesideBars, styleChart,
     };
   } else {
     main();
