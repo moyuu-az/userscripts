@@ -25,6 +25,11 @@
     return terms.every((term) => haystack.includes(term));
   }
 
+  // 件数表示の textContent 代入は毎回 childList の mutation を出す。これにも反応すると、絞り込み中は毎フレーム refresh し続ける
+  function isOwnMutation(record) {
+    return record.target.closest?.('.mfx-filter-box') != null;
+  }
+
   function isTypingTarget(el) {
     if (!el) return false;
     return el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
@@ -162,9 +167,10 @@
         transition: background-color .15s, border-color .15s;
       }
       .btn:hover { border-color: #cfd4dc !important; }
-      .btn-warning, .btn-primary { background-color: var(--mfx-accent) !important; border-color: var(--mfx-accent) !important; color: #fff !important; }
-      .btn-success { background-color: #16a34a !important; border-color: #16a34a !important; color: #fff !important; }
-      .btn-danger { background-color: #dc2626 !important; border-color: #dc2626 !important; color: #fff !important; }
+      /* .btn:hover の灰色の枠に負けないよう、.btn と重ねて詳細度を上げる */
+      .btn.btn-warning, .btn.btn-primary { background-color: var(--mfx-accent) !important; border-color: var(--mfx-accent) !important; color: #fff !important; }
+      .btn.btn-success { background-color: #16a34a !important; border-color: #16a34a !important; color: #fff !important; }
+      .btn.btn-danger { background-color: #dc2626 !important; border-color: #dc2626 !important; color: #fff !important; }
       .btn-warning:hover, .btn-primary:hover, .btn-success:hover, .btn-danger:hover { filter: brightness(.95); }
       input[type="text"], input[type="search"], input[type="number"], select, textarea {
         border-radius: 8px !important;
@@ -200,8 +206,8 @@
 
     // 月の切り替えやカテゴリ編集で表が Ajax で差し替わるので、そのたびに付け直す
     let scheduled = false;
-    new MutationObserver(() => {
-      if (scheduled) return;
+    new MutationObserver((records) => {
+      if (scheduled || records.every(isOwnMutation)) return;
       scheduled = true;
       requestAnimationFrame(() => {
         scheduled = false;
@@ -213,7 +219,7 @@
   }
 
   if (typeof module !== 'undefined') {
-    module.exports = { normalize, matchesQuery, isTypingTarget };
+    module.exports = { normalize, matchesQuery, isTypingTarget, isOwnMutation };
   } else {
     main();
   }
