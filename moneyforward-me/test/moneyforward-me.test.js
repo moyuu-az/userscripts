@@ -4,6 +4,7 @@ const {
   normalize, matchesQuery, isTypingTarget, isOwnMutation,
   resolveTheme, nextThemePref, parseRgb, luminance, classifyBg, classifyFg, isLightBorder, hasLightBorder,
   parseAmount, formatAmount, countUp, institutionOptions, spendLevels,
+  ratiosToMax, formatYenCompact, shortDateLabel, parseColor, seriesColor, isStackTop, netSeries,
 } = require('../moneyforward-me.user.js');
 
 test('normalize: 全角英数・カンマ・連続空白をそろえる', () => {
@@ -326,4 +327,73 @@ test('countUp: 動きを減らす設定・裏のタブ・金額でない文字�
   const same = amountEl('1,000円');
   countUp(same, '1,000円');
   assert.equal(frames.length, 1);
+});
+
+test('ratiosToMax: 最大を 1 にした比。0 と負は 0、全部 0 でも 0 で割らない', () => {
+  assert.deepEqual(ratiosToMax([12.14, 6.07, 0]), [1, 0.5, 0]);
+  assert.deepEqual(ratiosToMax([0, 0]), [0, 0]);
+  assert.deepEqual(ratiosToMax([-1, 2]), [0, 1]);
+  assert.deepEqual(ratiosToMax([]), []);
+});
+
+test('formatYenCompact: 1 万未満は桁区切り、万・億は小数 1 桁で丸める', () => {
+  assert.equal(formatYenCompact(0), '0');
+  assert.equal(formatYenCompact(9999), '9,999');
+  assert.equal(formatYenCompact(10000), '1万');
+  assert.equal(formatYenCompact(15000), '1.5万');
+  assert.equal(formatYenCompact(1234567), '123.5万');
+  assert.equal(formatYenCompact(-50000), '-5万');
+  assert.equal(formatYenCompact(120000000), '1.2億');
+});
+
+test('shortDateLabel: 日付は「月/日」、月次の「〜」付きは「N月」、それ以外はそのまま', () => {
+  assert.equal(shortDateLabel('2026/10/01'), '10/1');
+  assert.equal(shortDateLabel('2026-10-02'), '10/2');
+  assert.equal(shortDateLabel('2026/05/01〜'), '5月');
+  assert.equal(shortDateLabel('食費'), '食費');
+  assert.equal(shortDateLabel(3), 3);
+});
+
+test('parseColor: #rgb・#rrggbb・rgb()・rgba() を読み、読めなければ null', () => {
+  assert.deepEqual(parseColor('#DF4C52'), { r: 223, g: 76, b: 82, a: 1 });
+  assert.deepEqual(parseColor('#fff'), { r: 255, g: 255, b: 255, a: 1 });
+  assert.deepEqual(parseColor('rgba(40,129,215,0.9)'), { r: 40, g: 129, b: 215, a: 0.9 });
+  assert.deepEqual(parseColor('rgb(255, 127, 133)'), { r: 255, g: 127, b: 133, a: 1 });
+  assert.equal(parseColor('red'), null);
+  assert.equal(parseColor(undefined), null);
+});
+
+test('seriesColor: ダークでは暗い色だけを白へ寄せ、明るい色とライトはそのまま。透明度を指定できる', () => {
+  assert.equal(seriesColor('#DF4C52', false), 'rgba(223, 76, 82, 1)');
+  assert.equal(seriesColor('#DF4C52', true), 'rgba(223, 76, 82, 1)');
+  assert.equal(seriesColor('#4B4560', false), 'rgba(75, 69, 96, 1)');
+  assert.equal(seriesColor('#4B4560', true), 'rgba(147, 143, 160, 1)');
+  assert.equal(seriesColor('rgba(40,129,215,0.9)', false, 0.22), 'rgba(40, 129, 215, 0.22)');
+  assert.equal(seriesColor('red', true), 'red'); // 読めない色は触らない
+});
+
+test('isStackTop: 同じ積み上げの後ろに 0 でない見えている系列があれば一番上ではない', () => {
+  const ds = [
+    { stack: 'outgo', data: [1, 1] },
+    { stack: 'outgo', data: [2, 0] },
+    { stack: 'income', data: [5, 5] },
+  ];
+  assert.equal(isStackTop(ds, 0, 0), false); // 後ろの outgo が 2
+  assert.equal(isStackTop(ds, 0, 1), true); // 後ろの outgo が 0
+  assert.equal(isStackTop(ds, 1, 0), true);
+  assert.equal(isStackTop(ds, 2, 0), true); // 別の積み上げは見ない
+  assert.equal(isStackTop(ds, 0, 0, (j) => j !== 1), true); // 凡例で隠した系列は数えない
+  assert.equal(isStackTop([...ds, { stack: 'outgo', data: [9, 9], mfxNet: true }], 1, 0), true); // 収支の線は数えない
+});
+
+test('netSeries: 収入から支出の積み上げを引く。どちらかがなければ null', () => {
+  const ds = [
+    { stack: 'outgo', data: [100, 200] },
+    { stack: 'outgo', data: [50, null] },
+    { stack: 'income', data: [300, 100] },
+    { stack: 'mfx-net', data: [0, 0], mfxNet: true },
+  ];
+  assert.deepEqual(netSeries(ds), [150, -100]);
+  assert.equal(netSeries([{ stack: 'outgo', data: [1] }]), null);
+  assert.equal(netSeries([{ data: [1] }, { data: [2] }]), null); // 資産推移などの積み上げではない棒
 });
