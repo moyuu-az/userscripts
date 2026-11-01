@@ -296,7 +296,9 @@
       if (/^(SCRIPT|STYLE|NOSCRIPT|IMG|CANVAS|IFRAME|BR|svg)$/i.test(el.tagName) || el.closest('svg, .mfx-own')) continue;
       const cs = getComputedStyle(el);
       const bg = classifyBg(parseRgb(cs.backgroundColor));
-      const fg = classifyFg(parseRgb(cs.color));
+      // .btn の文字色はこのスクリプトの CSS が地の色に合わせて決めている。読むと、オレンジの地の上の濃い文字を
+      // 「暗い文字」と見なして灰色に変えてしまう
+      const fg = el.matches('.btn') ? null : classifyFg(parseRgb(cs.color));
       // 親と同じ文字色は受け継いだだけのことが多く、親を直せば変わる。全要素にクラスを付けると重いので後回しにする
       const inherited = fg && el.parentElement && getComputedStyle(el.parentElement).color === cs.color;
       if (inherited) sameAsParent.push(el);
@@ -480,7 +482,6 @@
       --mfx-accent: #ff8a3d;
       --mfx-accent-soft: rgba(255,138,61,.14);
       --mfx-accent-text: #ff8a3d;
-      --mfx-on-accent: #1f2328;
       --mfx-plus: #60a5fa;
       --mfx-minus: #f87171;
       --mfx-warn-bg: rgba(245,158,11,.14);
@@ -571,6 +572,17 @@
     .btn.btn-success { background-color: #16a34a !important; border-color: #16a34a !important; color: #fff !important; }
     .btn.btn-danger { background-color: #dc2626 !important; border-color: #dc2626 !important; color: #fff !important; }
     .btn-warning:hover, .btn-primary:hover, .btn-success:hover, .btn-danger:hover { filter: brightness(.95); }
+    /* ダークではオレンジのベタ塗りが浮くので、薄いオレンジの地にオレンジの文字と枠で控えめにする */
+    html[data-mfx-theme="dark"] .btn.btn-warning, html[data-mfx-theme="dark"] .btn.btn-primary {
+      background-color: var(--mfx-accent-soft) !important; border-color: rgba(255,138,61,.45) !important; color: var(--mfx-accent-text) !important;
+    }
+    html[data-mfx-theme="dark"] .btn.btn-warning:hover, html[data-mfx-theme="dark"] .btn.btn-primary:hover { background-color: rgba(255,138,61,.24) !important; filter: none; }
+    /* 「集計期間を変更」「手入力」: 古いメモ帳の画像を隠し、MF がインラインで指定した幅と余白を上書きして高さをそろえる */
+    .cf-new-btn img { display: none !important; }
+    .cf-new-btn {
+      box-sizing: border-box !important; height: 34px !important; width: auto !important; padding: 0 16px !important; line-height: 1 !important;
+      display: inline-flex !important; align-items: center; justify-content: center; vertical-align: middle;
+    }
     input[type="text"], input[type="search"], input[type="number"], input[type="password"], select, textarea {
       border-radius: 8px !important; border: 1px solid var(--mfx-border) !important; box-shadow: none !important;
       background-color: var(--mfx-surface) !important; color: var(--mfx-text) !important;
