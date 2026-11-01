@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const {
   normalize, matchesQuery, isTypingTarget, isOwnMutation,
   resolveTheme, nextThemePref, parseRgb, luminance, classifyBg, classifyFg, isLightBorder, hasLightBorder,
+  parseAmount, formatAmount,
 } = require('../moneyforward-me.user.js');
 
 test('normalize: 全角英数・カンマ・連続空白をそろえる', () => {
@@ -180,4 +181,21 @@ test('hasLightBorder: 幅 0 の辺の色（明るい文字色）では置き換�
   assert.equal(hasLightBorder(borders({ Left: ['4px', 'rgb(255, 138, 61)'] })), false);
   assert.equal(hasLightBorder(borders({ Bottom: ['1px', 'rgb(42, 48, 60)'] })), false);
   assert.equal(hasLightBorder(borders({})), false);
+});
+
+test('parseAmount: 月次収支の「1,234円」「-1,234円」を数にし、それ以外は null', () => {
+  assert.equal(parseAmount('2,757,114円'), 2757114);
+  assert.equal(parseAmount('-214,320円'), -214320);
+  assert.equal(parseAmount('−214,320円'), -214320); // 全角のマイナス
+  assert.equal(parseAmount(' 0円 '), 0);
+  assert.equal(parseAmount(''), null);
+  assert.equal(parseAmount('---'), null);
+  assert.equal(parseAmount('1,234'), null);
+});
+
+test('formatAmount: カウントアップの途中の値を MF と同じ書式にする', () => {
+  assert.equal(formatAmount(2757114), '2,757,114円');
+  assert.equal(formatAmount(-214320), '-214,320円');
+  assert.equal(formatAmount(1234.6), '1,235円');
+  assert.equal(formatAmount(-0.4), '0円');
 });

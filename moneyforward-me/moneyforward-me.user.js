@@ -164,6 +164,37 @@
     if (el.textContent !== text) el.textContent = text;
   }
 
+  function parseAmount(text) {
+    const m = /^([-−]?)([\d,]+)円$/.exec(text.trim());
+    return m ? (m[1] ? -1 : 1) * Number(m[2].replace(/,/g, '')) : null;
+  }
+
+  function formatAmount(n) {
+    const r = Math.round(n);
+    return `${r < 0 ? '-' : ''}${Math.abs(r).toLocaleString('ja-JP')}円`;
+  }
+
+  const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // 金額を今の表示からカウントアップ（ダウン）させる。refresh は DOM が変わるたびに呼ばれるので、
+  // 同じ目標値なら動いている途中のアニメーションをそのまま続ける
+  function countUp(el, text) {
+    if (el.dataset.mfxTarget === text) return;
+    el.dataset.mfxTarget = text;
+    const to = parseAmount(text);
+    const from = parseAmount(el.textContent) ?? 0;
+    // 裏のタブでは requestAnimationFrame が止まり、表に出すまで数字が空のままになるので、すぐ入れる
+    if (to === null || from === to || reducedMotion() || document.hidden) return setText(el, text);
+    const start = performance.now();
+    const step = (now) => {
+      if (el.dataset.mfxTarget !== text) return; // 途中で月が変わった
+      const t = Math.min((now - start) / 600, 1);
+      setText(el, t === 1 ? text : formatAmount(from + (to - from) * (1 - (1 - t) ** 3)));
+      if (t < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+
   // 月次収支の表（当月収入・支出・収支）を数字のカードにする。月を切り替えると MF が表を差し替えるので毎回読み直す
   function renderSummary() {
     const source = document.querySelector('#monthly_total_table_kakeibo');
@@ -196,7 +227,7 @@
     summary.querySelectorAll('.mfx-stat').forEach((stat, i) => {
       const cell = cells[i * 2];
       setText(stat.firstChild, labels[i * 2]?.textContent.trim() ?? '');
-      setText(stat.lastChild, cell?.textContent.trim() ?? '');
+      countUp(stat.lastChild, cell?.textContent.trim() ?? '');
       stat.lastChild.className = `mfx-stat-value ${cell?.className ?? ''}`;
     });
   }
@@ -378,7 +409,9 @@
     toggle.addEventListener('click', () => {
       themePref = nextThemePref(readThemePref());
       writeStorage(THEME_KEY, themePref);
-      applyTheme();
+      // 色を CSS の transition で変えると、darkify が切り替え途中の色を読んで判定を誤るので、画面全体のクロスフェードにする
+      if (document.startViewTransition && !reducedMotion()) document.startViewTransition(applyTheme);
+      else applyTheme();
     });
     foot.append(toggle);
     nav.append(foot);
@@ -614,6 +647,40 @@
     #mfx-filter { flex: 1; max-width: 480px; height: 36px; padding: 0 12px; font-size: 14px; background: var(--mfx-surface-2) !important; }
     #mfx-filter:focus { background: var(--mfx-surface) !important; }
     .mfx-count { color: var(--mfx-muted); font-variant-numeric: tabular-nums; }
+
+    /* アニメーション。OS で「視差効果を減らす」を選んでいる人には動かさない。
+       fill-mode は backwards にして、終わったら元の指定に戻す（both だと終わったあとも transform が残り、
+       数字のカードの hover の浮き上がりが効かず、本文の中のモーダル（position: fixed）の基準もずれる） */
+    @media (prefers-reduced-motion: no-preference) {
+      @keyframes mfx-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+      @keyframes mfx-slide { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+      .container-large #main-container,
+      body:has(#home) :is(.home-col-assets #user-info, .home-col-assets section.accounts, #js-mf-main-content > div > *),
+      .mfx-stat, .mfx-cal-open #kakeibo .mf-col-custom-body {
+        animation: mfx-rise .5s cubic-bezier(.2, .7, .2, 1) backwards;
+      }
+      body:has(#home) #js-mf-main-content > div > :nth-child(2), .mfx-stat:nth-child(2) { animation-delay: .06s; }
+      body:has(#home) #js-mf-main-content > div > :nth-child(3), .mfx-stat:nth-child(3) { animation-delay: .12s; }
+      body:has(#home) #js-mf-main-content > div > :nth-child(4) { animation-delay: .18s; }
+      body:has(#home) .home-col-assets section.accounts { animation-delay: .1s; }
+      .mfx-nav > li { animation: mfx-slide .4s cubic-bezier(.2, .7, .2, 1) backwards; }
+      .mfx-nav > li:nth-child(2) { animation-delay: .03s; }
+      .mfx-nav > li:nth-child(3) { animation-delay: .06s; }
+      .mfx-nav > li:nth-child(4) { animation-delay: .09s; }
+      .mfx-nav > li:nth-child(5) { animation-delay: .12s; }
+      .mfx-nav > li:nth-child(6) { animation-delay: .15s; }
+      .mfx-nav > li:nth-child(7) { animation-delay: .18s; }
+      .mfx-nav > li:nth-child(n+8) { animation-delay: .21s; }
+      /* 自前の要素は darkify の対象外なので、色の transition を付けても判定を誤らない */
+      .mfx-nav a, #mfx-theme-toggle, #mfx-cal-toggle { transition: background-color .15s, color .15s; }
+      .mfx-nav svg { transition: transform .2s; }
+      .mfx-nav a:hover svg { transform: scale(1.12); }
+      /* 浮き上がるのは中にメニューを持たない数字のカードだけ。メニューを持つカードを浮かせると、開いたメニューが隣のカードの下に潜る */
+      .mfx-stat { transition: transform .2s, box-shadow .2s; }
+      .mfx-stat:hover { transform: translateY(-2px); box-shadow: var(--mfx-shadow); }
+      #mfx-cal-toggle:active, #mfx-theme-toggle:active { transform: scale(.97); }
+      ::view-transition-old(root), ::view-transition-new(root) { animation-duration: .3s; }
+    }
   `;
 
   function onReady() {
@@ -668,6 +735,7 @@
     module.exports = {
       normalize, matchesQuery, isTypingTarget, isOwnMutation,
       resolveTheme, nextThemePref, parseRgb, luminance, classifyBg, classifyFg, isLightBorder, hasLightBorder,
+      parseAmount, formatAmount,
     };
   } else {
     main();
