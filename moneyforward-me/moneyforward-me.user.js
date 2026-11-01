@@ -247,10 +247,13 @@
 
   const darkened = new WeakSet();
 
-  function darkify(root) {
+  // roots はまとめて渡す。月を切り替えると MF は表の行を 1 行ずつ足すので、行ごとに読み書きすると
+  // そのたびにスタイルの再計算が走り、474 行の月で 700ms 近く止まった
+  function darkify(roots) {
     // 足されてすぐ外された要素は getComputedStyle が空を返す。処理済みにすると付け直されたときに直せなくなる
-    if (!root || root.nodeType !== 1 || !root.isConnected) return;
-    const targets = [root, ...root.querySelectorAll('*')];
+    const targets = roots
+      .filter((root) => root?.nodeType === 1 && root.isConnected)
+      .flatMap((root) => [root, ...root.querySelectorAll('*')]);
     // 読み取りをまとめてから書き込み、書き込みのたびにスタイルの再計算が走らないようにする
     const plans = [];
     const sameAsParent = [];
@@ -331,8 +334,8 @@
     list.className = 'mfx-nav';
     for (const li of items) {
       const top = li.querySelector(':scope > a');
-      if (!top) continue;
-      const href = top.getAttribute('href');
+      const href = top?.getAttribute('href');
+      if (!href) continue;
       const subs = [...li.querySelectorAll('.dropdown-menu a')];
       const active = top.classList.contains('active') || subs.some((a) => a.getAttribute('href') === path);
 
@@ -373,8 +376,8 @@
     toggle.type = 'button';
     toggle.id = 'mfx-theme-toggle';
     toggle.addEventListener('click', () => {
-      const pref = nextThemePref(readThemePref());
-      writeStorage(THEME_KEY, pref);
+      themePref = nextThemePref(readThemePref());
+      writeStorage(THEME_KEY, themePref);
       applyTheme();
     });
     foot.append(toggle);
@@ -385,9 +388,11 @@
   }
 
   let darkQuery; // main() で設定する。テストで読み込むときは window がない
+  // localStorage が使えない環境でも、ボタンで選んだ値をこのページを開いている間は保つ
+  let themePref = null;
 
   function readThemePref() {
-    const pref = readStorage(THEME_KEY);
+    const pref = readStorage(THEME_KEY) ?? themePref;
     return pref === 'light' || pref === 'dark' ? pref : 'auto';
   }
 
@@ -395,14 +400,14 @@
     const toggle = document.querySelector('#mfx-theme-toggle');
     if (!toggle) return;
     const label = THEME_LABELS[readThemePref()];
+    // 読み上げの名前は見えている文字と同じにする（aria-label で別の名前を付けると音声操作で呼べない）
     toggle.innerHTML = `${icon(ICONS.theme)}<span>テーマ: ${label}</span>`;
-    toggle.setAttribute('aria-label', `テーマを切り替える（今は${label}）`);
   }
 
   function applyTheme() {
     const theme = resolveTheme(readThemePref(), darkQuery.matches);
     document.documentElement.dataset.mfxTheme = theme;
-    if (theme === 'dark' && document.body) darkify(document.body);
+    if (theme === 'dark' && document.body) darkify([document.body]);
     updateThemeToggle();
   }
 
@@ -569,18 +574,18 @@
     #cf-detail-table td.amount { text-align: right; font-weight: 600; white-space: nowrap; }
     #cf-detail-table .btn-small { padding: 2px 8px !important; font-size: 12px !important; }
 
-    /* ホーム: 資産の列と中央の列を、カードを並べたダッシュボードにする */
+    /* ホーム: 資産の列と中央の列を、カードを並べたダッシュボードにする。id が汎用的なので #home があるページに限る */
     body:has(#home) .container-large #main-container { background: transparent !important; box-shadow: none !important; padding: 0 !important; }
-    #js-content-body { display: grid !important; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; align-items: start; }
-    #js-content-body::before, #js-content-body::after, #js-mf-main-content > div::before, #js-mf-main-content > div::after { display: none !important; }
-    .home-col-assets, .mf-col-custom-home { float: none !important; width: auto !important; margin: 0 !important; padding: 0 !important; }
-    .home-col-assets .main-container-margin-top { margin: 0 !important; display: flex; flex-direction: column; gap: 20px; }
-    #js-mf-main-content > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
-    .home-col-assets #user-info, .home-col-assets section.accounts, #js-mf-main-content > div > * {
+    body:has(#home) #js-content-body { display: grid !important; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; align-items: start; }
+    body:has(#home) :is(#js-content-body, #js-mf-main-content > div)::before, body:has(#home) :is(#js-content-body, #js-mf-main-content > div)::after { display: none !important; }
+    body:has(#home) :is(.home-col-assets, .mf-col-custom-home) { float: none !important; width: auto !important; margin: 0 !important; padding: 0 !important; }
+    body:has(#home) .home-col-assets .main-container-margin-top { margin: 0 !important; display: flex; flex-direction: column; gap: 20px; }
+    body:has(#home) #js-mf-main-content > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+    body:has(#home) :is(.home-col-assets #user-info, .home-col-assets section.accounts, #js-mf-main-content > div > *) {
       background: var(--mfx-surface) !important; border-radius: var(--mfx-radius); box-shadow: var(--mfx-shadow);
       padding: 20px !important; margin: 0 !important; box-sizing: border-box; min-width: 0;
     }
-    #cf-info, #assets-info { grid-column: 1 / -1; }
+    body:has(#home) :is(#cf-info, #assets-info) { grid-column: 1 / -1; }
 
     /* グラフ（Highcharts）の文字と罫線を配色に合わせる */
     .highcharts-background { fill: transparent !important; }
@@ -637,7 +642,7 @@
         refresh();
         const nodes = added;
         added = [];
-        nodes.forEach(darkify);
+        darkify(nodes);
       });
     }).observe(document.body, { childList: true, subtree: true });
 
