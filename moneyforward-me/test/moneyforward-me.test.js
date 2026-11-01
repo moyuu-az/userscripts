@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const {
   normalize, matchesQuery, isTypingTarget, isOwnMutation,
   resolveTheme, nextThemePref, parseRgb, luminance, classifyBg, classifyFg, isLightBorder, hasLightBorder,
-  parseAmount, formatAmount, countUp,
+  parseAmount, formatAmount, countUp, institutionOptions, spendLevels,
 } = require('../moneyforward-me.user.js');
 
 test('normalize: 全角英数・カンマ・連続空白をそろえる', () => {
@@ -191,14 +191,40 @@ test('hasLightBorder: 幅 0 の辺の色（明るい文字色）では置き換�
   assert.equal(hasLightBorder(borders({})), false);
 });
 
-test('parseAmount: 月次収支の「1,234円」「-1,234円」を数にし、それ以外は null', () => {
+test('parseAmount: 月次収支の「1,234円」とカレンダーの「-1,234」を数にし、それ以外は null', () => {
   assert.equal(parseAmount('2,757,114円'), 2757114);
   assert.equal(parseAmount('-214,320円'), -214320);
   assert.equal(parseAmount('−214,320円'), -214320); // 全角のマイナス
   assert.equal(parseAmount(' 0円 '), 0);
   assert.equal(parseAmount(''), null);
   assert.equal(parseAmount('---'), null);
-  assert.equal(parseAmount('1,234'), null);
+  assert.equal(parseAmount('-7,400'), -7400);
+  assert.equal(parseAmount('1,234'), 1234);
+  assert.equal(parseAmount('+90'), null); // 収入の「+」は読まない（カレンダーで読むのは支出だけ）
+  assert.equal(parseAmount('1,234円円'), null);
+});
+
+test('institutionOptions: 件数の多い順に並べ、同数は名前順。空の名前は数えない', () => {
+  assert.deepEqual(institutionOptions(['B銀行', 'Aカード', 'B銀行', '', 'C銀行']), [
+    { name: 'B銀行', count: 2 },
+    { name: 'Aカード', count: 1 },
+    { name: 'C銀行', count: 1 },
+  ]);
+  assert.deepEqual(institutionOptions([]), []);
+  assert.deepEqual(institutionOptions(['']), []);
+});
+
+test('spendLevels: 最も多い日を 1 にし、平方根で縮める', () => {
+  assert.deepEqual(spendLevels([400, 100, 0]), [1, 0.5, 0]);
+});
+
+test('spendLevels: 支出のない月は全部 0（0 で割らない）', () => {
+  assert.deepEqual(spendLevels([0, 0]), [0, 0]);
+  assert.deepEqual(spendLevels([]), []);
+});
+
+test('spendLevels: 負の値（返金で差し引きがマイナス）は 0 にする', () => {
+  assert.deepEqual(spendLevels([-100, 100]), [0, 1]);
 });
 
 test('formatAmount: カウントアップの途中の値を MF と同じ書式にする', () => {

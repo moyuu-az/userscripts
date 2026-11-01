@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MoneyForward ME Tweaks
 // @namespace    https://github.com/moyuu-az/userscripts
-// @version      0.2.0
+// @version      0.3.0
 // @description  サイドバーとダークモードのある見た目に作り直し、入出金の絞り込み・未分類の強調・←→キーでの月移動を足す
 // @match        https://moneyforward.com/*
 // @grant        none
@@ -126,16 +126,53 @@
     return [...tr.cells].map(cellText).join(' ');
   }
 
+  // 選択肢は件数の多い順。よく使う口座ほど上に来る
+  function institutionOptions(names) {
+    const counts = new Map();
+    for (const name of names) if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+    return [...counts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'ja'));
+  }
+
+  // 保有金融機関の見出しに選択欄を置く。選択肢は表の行から作るので、月を切り替えるたびに作り直す
+  function ensureInstitutionFilter(rows) {
+    const th = document.querySelector('#cf-detail-table thead th.serv');
+    if (!th) return null;
+    let select = th.querySelector('#mfx-inst');
+    if (!select) {
+      const box = document.createElement('div');
+      box.className = 'mfx-inst-box mfx-own';
+      // 見出しのクリックは並べ替えになるので、選択欄の操作を見出しまで伝えない
+      for (const type of ['click', 'mousedown']) box.addEventListener(type, (e) => e.stopPropagation());
+      select = document.createElement('select');
+      select.id = 'mfx-inst';
+      select.setAttribute('aria-label', '保有金融機関で絞り込む');
+      select.addEventListener('change', refresh);
+      box.append(select);
+      th.append(box);
+    }
+    const options = institutionOptions(rows.map((tr) => cellText(tr.cells[th.cellIndex])));
+    const key = options.map((o) => `${o.name}\t${o.count}`).join('\n');
+    if (select.dataset.mfxKey !== key) {
+      select.dataset.mfxKey = key;
+      const value = select.value;
+      select.replaceChildren(new Option('全て', ''), ...options.map((o) => new Option(`${o.name}（${o.count}件）`, o.name)));
+      // 選んでいた口座が新しい月にないときは「全て」に戻る。見えない値で絞り込んだままにしない
+      select.value = options.some((o) => o.name === value) ? value : '';
+    }
+    return { select, index: th.cellIndex };
+  }
+
   function applyRows(query) {
     let shown = 0;
-    const rows = document.querySelectorAll(ROW_SELECTOR);
+    const rows = [...document.querySelectorAll(ROW_SELECTOR)];
+    const inst = ensureInstitutionFilter(rows);
     rows.forEach((tr) => {
       tr.classList.toggle('mfx-uncategorized', cellText(tr.querySelector('td.lctg')) === '未分類');
-      const hit = matchesQuery(rowText(tr), query);
+      const hit = matchesQuery(rowText(tr), query) && (!inst?.select.value || cellText(tr.cells[inst.index]) === inst.select.value);
       tr.classList.toggle('mfx-hidden', !hit);
       if (hit) shown++;
     });
-    return { shown, total: rows.length };
+    return { shown, total: rows.length, filtered: !!(query || inst?.select.value) };
   }
 
   function ensureFilterBox() {
@@ -164,8 +201,9 @@
     if (el.textContent !== text) el.textContent = text;
   }
 
+  // 月次収支の「1,234円」とカレンダーの「-1,234」の両方を読む
   function parseAmount(text) {
-    const m = /^([-−]?)([\d,]+)円$/.exec(text.trim());
+    const m = /^([-−]?)([\d,]+)円?$/.exec(text.trim());
     return m ? (m[1] ? -1 : 1) * Number(m[2].replace(/,/g, '')) : null;
   }
 
@@ -234,6 +272,37 @@
     });
   }
 
+  // 日ごとの支出をマスの下端の棒の長さにする（月で最も多い日が 1）。平方根で縮め、家賃のような 1 日だけ大きい支出で
+  // ほかの日の棒が見えなくならないようにする。マスを塗らないのは、塗ると上に載る赤い金額の文字のコントラストが 4.5:1 を割るため
+  function spendLevels(values) {
+    const max = Math.max(0, ...values);
+    return values.map((v) => (max > 0 && v > 0 ? Math.sqrt(v / max) : 0));
+  }
+
+  // カレンダーの金額（.fc-event）はマスの上に絶対配置で重ねてあり、どの日のものかは位置でしか分からない
+  function paintSpendBars() {
+    const fc = document.querySelector('#kakeibo .fc');
+    if (!fc) return;
+    const days = [...fc.querySelectorAll('tbody td.fc-widget-content')];
+    const rects = days.map((td) => td.getBoundingClientRect());
+    const spent = days.map(() => 0);
+    for (const ev of fc.querySelectorAll('.fc-event')) {
+      const r = ev.getBoundingClientRect();
+      const x = r.left + r.width / 2;
+      const y = r.top + r.height / 2;
+      const i = rects.findIndex((d) => x >= d.left && x < d.right && y >= d.top && y < d.bottom);
+      const other = i < 0 || days[i].classList.contains('fc-other-month');
+      ev.classList.toggle('mfx-ev-other', other);
+      if (other) continue;
+      spent[i] += -(parseAmount(ev.querySelector('.minus-color')?.textContent ?? '') ?? 0);
+    }
+    spendLevels(spent).forEach((level, i) => {
+      days[i].classList.toggle('mfx-spend', level > 0);
+      if (level > 0) days[i].style.setProperty('--mfx-spend', level.toFixed(3));
+      else days[i].style.removeProperty('--mfx-spend');
+    });
+  }
+
   function setCalendarOpen(open) {
     document.documentElement.classList.toggle('mfx-cal-open', open);
     writeStorage(CAL_KEY, open ? '1' : '0');
@@ -250,8 +319,9 @@
     renderSummary();
     const input = ensureFilterBox();
     if (!input) return;
-    const { shown, total } = applyRows(input.value);
-    setText(input.nextElementSibling, input.value ? `${shown} / ${total} 件` : '');
+    const { shown, total, filtered } = applyRows(input.value);
+    setText(input.nextElementSibling, filtered ? `${shown} / ${total} 件` : '');
+    if (document.documentElement.classList.contains('mfx-cal-open')) paintSpendBars();
   }
 
   function clickMonthButton(direction) {
@@ -651,6 +721,41 @@
     /* 予算の進捗バーの地は白い画像なので、色の判定では拾えない */
     html[data-mfx-theme="dark"] .progress { background-image: none !important; }
 
+    /* カレンダー: 月の操作をボタンの列にし、日付・金額に強弱を付ける。fullcalendar は列幅と金額の位置を JS で決めるので、幅と位置には触らない */
+    #kakeibo .monthController { float: none !important; width: auto !important; margin: 0 0 12px !important; }
+    #kakeibo .monthController > div { display: flex; align-items: center; gap: 8px; }
+    #kakeibo .monthController > div > div { float: none !important; width: auto !important; margin: 0 !important; }
+    #kakeibo .fc-header-title h2 { margin: 0 8px; font-size: 18px; font-weight: 700; line-height: 32px; font-variant-numeric: tabular-nums; }
+    #kakeibo .fc-button {
+      display: inline-flex; align-items: center; height: 32px; padding: 0 12px; margin: 0 !important; box-sizing: border-box; cursor: pointer;
+      border: 1px solid var(--mfx-border) !important; border-radius: 8px !important; background: var(--mfx-surface) !important; color: var(--mfx-text) !important;
+    }
+    #kakeibo .fc-button:hover { background: var(--mfx-hover) !important; }
+    #kakeibo :is(.fc-button-inner, .fc-button-content) {
+      float: none !important; height: auto !important; margin: 0 !important; padding: 0 !important; border: 0 !important;
+      background: transparent !important; color: inherit !important; font-size: 13px; line-height: 1;
+    }
+    #kakeibo .fc-button-effect { display: none !important; }
+    #kakeibo .fc-widget-header { padding: 6px 0 !important; font-size: 12px; font-weight: 600; color: var(--mfx-muted) !important; background: var(--mfx-surface-2) !important; }
+    #kakeibo :is(.fc-widget-header, .fc-widget-content) { border-color: var(--mfx-border) !important; }
+    #kakeibo th.fc-sun, #kakeibo td.fc-sun .fc-day-number { color: var(--mfx-minus) !important; }
+    #kakeibo th.fc-sat, #kakeibo td.fc-sat .fc-day-number { color: var(--mfx-plus) !important; }
+    #kakeibo .fc-day-number { float: none !important; padding: 6px 8px 0 !important; text-align: left; font-size: 12px; font-weight: 600; color: var(--mfx-muted); }
+    #kakeibo .fc-today { background: var(--mfx-accent-soft) !important; }
+    #kakeibo .fc-today .fc-day-number { color: var(--mfx-accent-text) !important; }
+    #kakeibo td.fc-other-month { background: var(--mfx-surface-2) !important; }
+    #kakeibo .fc-other-month .fc-day-number, #kakeibo .mfx-ev-other { opacity: .35; }
+    #kakeibo :is(.fc-event, .fc-event-inner) { background: transparent !important; border-color: transparent !important; }
+    #kakeibo .fc-event-title { font-size: 12px; line-height: 1.5; font-variant-numeric: tabular-nums; }
+    #kakeibo .fc-event .minus-color { font-size: 13px; font-weight: 600; }
+    /* 手入力の鉛筆は 42 マスすべてにあって目に付くので薄くし、マスに乗せたときだけ濃くする */
+    #kakeibo .calender-edit-item { opacity: .25; }
+    #kakeibo td.fc-widget-content:hover .calender-edit-item, #kakeibo .calender-edit-item:focus-visible { opacity: 1; }
+    #kakeibo td.fc-widget-content.mfx-spend {
+      background-image: linear-gradient(var(--mfx-minus), var(--mfx-minus)) !important; background-repeat: no-repeat !important;
+      background-position: left bottom !important; background-size: calc(var(--mfx-spend) * 100%) 4px !important;
+    }
+
     /* このスクリプトが足す要素 */
     tr.mfx-hidden { display: none; }
     tr.mfx-uncategorized td { background: var(--mfx-warn-bg) !important; }
@@ -659,6 +764,8 @@
     #mfx-filter { flex: 1; max-width: 480px; height: 36px; padding: 0 12px; font-size: 14px; background: var(--mfx-surface-2) !important; }
     #mfx-filter:focus { background: var(--mfx-surface) !important; }
     .mfx-count { color: var(--mfx-muted); font-variant-numeric: tabular-nums; }
+    .mfx-inst-box { margin-top: 4px; }
+    #mfx-inst { width: 100%; max-width: 180px; height: 28px; padding: 0 6px; font-size: 12px; font-weight: 400; }
 
     /* アニメーション。OS で「視差効果を減らす」を選んでいる人には動かさない。
        fill-mode は backwards にして、終わったら元の指定に戻す（both だと終わったあとも transform が残り、
@@ -748,7 +855,7 @@
     module.exports = {
       normalize, matchesQuery, isTypingTarget, isOwnMutation,
       resolveTheme, nextThemePref, parseRgb, luminance, classifyBg, classifyFg, isLightBorder, hasLightBorder,
-      parseAmount, formatAmount, countUp,
+      parseAmount, formatAmount, countUp, institutionOptions, spendLevels,
     };
   } else {
     main();
