@@ -1,6 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { normalize, matchesQuery, isTypingTarget, isOwnMutation } = require('../moneyforward-me.user.js');
+const {
+  normalize, matchesQuery, isTypingTarget, isOwnMutation,
+  resolveTheme, nextThemePref, parseRgb, luminance, classifyBg, classifyFg, isLightBorder,
+} = require('../moneyforward-me.user.js');
 
 test('normalize: 全角英数・カンマ・連続空白をそろえる', () => {
   assert.equal(normalize('ＡＢＣ　１,２３４円'), 'abc 1234円');
@@ -61,23 +64,97 @@ function fakeEl(className, parent = null) {
     className,
     parent,
     closest(sel) {
-      for (let n = this; n; n = n.parent) if (sel === `.${n.className}`) return n;
+      for (let n = this; n; n = n.parent) if (n.className.split(' ').some((c) => sel === `.${c}`)) return n;
       return null;
     },
   };
 }
 
-test('isOwnMutation: 絞り込み欄の中の変化は無視し、それ以外には反応する', () => {
+test('isOwnMutation: 自分で足した要素（.mfx-own）の中の変化は無視し、それ以外には反応する', () => {
   const body = fakeEl('body');
-  const box = fakeEl('mfx-filter-box', body);
+  const box = fakeEl('mfx-filter-box mfx-own', body);
+  const summaryValue = fakeEl('mfx-stat-value', fakeEl('mfx-stat', fakeEl('mfx-own', body)));
   const count = fakeEl('mfx-count', box);
   const tbody = fakeEl('tbody', fakeEl('table', body));
   // 件数表示の書き換え（target は span.mfx-count）を拾うと refresh が無限に回る
   assert.equal(isOwnMutation({ target: count }), true);
   assert.equal(isOwnMutation({ target: box }), true);
+  // 月次収支のカードの数字の書き換えも同じ
+  assert.equal(isOwnMutation({ target: summaryValue }), true);
   // 表の差し替えや、絞り込み欄の挿入（target は親）は拾う
   assert.equal(isOwnMutation({ target: tbody }), false);
   assert.equal(isOwnMutation({ target: body }), false);
   // closest を持たないノード（Document など）は自分の変化ではない
   assert.equal(isOwnMutation({ target: {} }), false);
+});
+
+test('resolveTheme: 手動の指定を優先し、自動なら OS の設定に従う', () => {
+  assert.equal(resolveTheme('light', true), 'light');
+  assert.equal(resolveTheme('dark', false), 'dark');
+  assert.equal(resolveTheme('auto', true), 'dark');
+  assert.equal(resolveTheme('auto', false), 'light');
+  // 保存値が壊れていたら自動として扱う
+  assert.equal(resolveTheme('purple', true), 'dark');
+  assert.equal(resolveTheme(null, false), 'light');
+});
+
+test('nextThemePref: 自動 → ライト → ダーク → 自動 の順に回り、不明な値は自動に戻す', () => {
+  assert.equal(nextThemePref('auto'), 'light');
+  assert.equal(nextThemePref('light'), 'dark');
+  assert.equal(nextThemePref('dark'), 'auto');
+  assert.equal(nextThemePref(undefined), 'auto');
+});
+
+test('parseRgb: getComputedStyle の rgb()/rgba() を読み、それ以外は null', () => {
+  assert.deepEqual(parseRgb('rgb(255, 255, 255)'), { r: 255, g: 255, b: 255, a: 1 });
+  assert.deepEqual(parseRgb('rgba(0, 0, 0, 0)'), { r: 0, g: 0, b: 0, a: 0 });
+  assert.deepEqual(parseRgb('rgb(10 20 30 / 0.5)'), { r: 10, g: 20, b: 30, a: 0.5 });
+  assert.equal(parseRgb('transparent'), null);
+  assert.equal(parseRgb(''), null);
+  assert.equal(parseRgb(undefined), null);
+  assert.equal(parseRgb('rgb(a, b, c)'), null);
+});
+
+test('luminance: 白は 1、黒は 0', () => {
+  assert.equal(luminance({ r: 255, g: 255, b: 255 }), 1);
+  assert.equal(luminance({ r: 0, g: 0, b: 0 }), 0);
+});
+
+test('classifyBg: 白は面の色、薄い灰色は一段明るい面、色付きの淡い背景は半透明の同じ色にする', () => {
+  assert.deepEqual(classifyBg(parseRgb('rgb(255, 255, 255)')), { cls: 'mfx-dk-bg1' });
+  assert.deepEqual(classifyBg(parseRgb('rgb(240, 240, 240)')), { cls: 'mfx-dk-bg2' });
+  // カレンダーの前月・翌月のマス（#ddd）も明るい面として置き換える
+  assert.deepEqual(classifyBg(parseRgb('rgb(221, 221, 221)')), { cls: 'mfx-dk-bg2' });
+  // カレンダーの今日の欄（#fcf8e3）は色味を残す
+  assert.deepEqual(classifyBg(parseRgb('rgb(252, 248, 227)')), { cls: 'mfx-dk-bgt', value: 'rgba(252, 248, 227, 0.16)' });
+});
+
+test('classifyBg: 透明・暗い色・濃い色の背景はそのまま', () => {
+  assert.equal(classifyBg(parseRgb('rgba(0, 0, 0, 0)')), null);
+  assert.equal(classifyBg(parseRgb('rgb(51, 51, 51)')), null);
+  assert.equal(classifyBg(parseRgb('rgb(150, 150, 150)')), null);
+  assert.equal(classifyBg(parseRgb('rgb(220, 38, 38)')), null); // 赤い「未分類」ボタン
+  // 予算の進捗バー（#9edc6f）のように彩度の高い色は、明るくても意味のある色なので薄めない
+  assert.equal(classifyBg(parseRgb('rgb(158, 220, 111)')), null);
+  assert.equal(classifyBg(null), null);
+});
+
+test('classifyFg: 黒に近い文字は本文色、灰色の文字は補助色、濃い色の文字は明るくする', () => {
+  assert.deepEqual(classifyFg(parseRgb('rgb(51, 51, 51)')), { cls: 'mfx-dk-fg1' });
+  assert.deepEqual(classifyFg(parseRgb('rgb(102, 102, 102)')), { cls: 'mfx-dk-fg2' });
+  assert.deepEqual(classifyFg(parseRgb('rgb(0, 85, 170)')), { cls: 'mfx-dk-fgt', value: 'rgb(115, 162, 208)' });
+});
+
+test('classifyFg: 明るい文字（白い文字や明るい色）と透明はそのまま', () => {
+  assert.equal(classifyFg(parseRgb('rgb(255, 255, 255)')), null);
+  assert.equal(classifyFg(parseRgb('rgb(200, 200, 200)')), null);
+  assert.equal(classifyFg(parseRgb('rgb(96, 165, 250)')), null);
+  assert.equal(classifyFg(parseRgb('rgba(0, 0, 0, 0)')), null);
+});
+
+test('isLightBorder: 明るい枠線だけを置き換える', () => {
+  assert.equal(isLightBorder(parseRgb('rgb(221, 221, 221)')), true);
+  assert.equal(isLightBorder(parseRgb('rgb(51, 51, 51)')), false);
+  assert.equal(isLightBorder(parseRgb('rgba(255, 255, 255, 0)')), false);
+  assert.equal(isLightBorder(null), false);
 });
