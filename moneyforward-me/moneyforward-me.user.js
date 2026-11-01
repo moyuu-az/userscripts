@@ -186,6 +186,8 @@
       /* 広告の列を消して本文を広げる */
       .mf-col-custom-ad, [class*="tag-manager-ad"], [id^="div-gpt-ad"], iframe[id^="google_ads"] { display: none !important; }
       .mf-col-custom-content-body { width: 100% !important; float: none !important; }
+      /* ホームは左の資産列が float なので、中央の列を残りの幅いっぱいに広げる。左との間隔は元の margin-left 30px を padding で保つ */
+      .mf-col-custom-home { float: none !important; width: auto !important; overflow: hidden; margin-left: 0 !important; padding-left: 30px; }
 
       /* このスクリプトが足す要素 */
       tr.mfx-hidden { display: none; }
@@ -197,6 +199,9 @@
       .mfx-count { color: var(--mfx-muted); font-variant-numeric: tabular-nums; }
     `;
     document.head.append(style);
+    // 広告列を消して本文を広げても、カレンダー（fullcalendar）は描画時の幅のまま列幅を固定しているので、
+    // 再計算させないと土曜の列だけが余白を抱えて広がる
+    window.dispatchEvent(new Event('resize'));
 
     document.addEventListener('keydown', (e) => {
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
