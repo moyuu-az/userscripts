@@ -312,7 +312,11 @@
       toggle.setAttribute('aria-expanded', String(open));
     }
     // 隠れている間に描画されたカレンダーは幅 0 で列幅を固定しているので、表示したら計算し直させる
-    if (open) window.dispatchEvent(new Event('resize'));
+    if (open) {
+      window.dispatchEvent(new Event('resize'));
+      // 閉じている間に月を移すと、前の月の棒が残ったマスを使い回すことがあるので、開いたら付け直す
+      paintSpendBars();
+    }
   }
 
   function refresh() {
