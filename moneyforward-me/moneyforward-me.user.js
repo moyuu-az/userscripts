@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         MoneyForward ME Tweaks
-// @namespace    https://github.com/moyuu/userscripts
+// @namespace    https://github.com/moyuu-az/userscripts
 // @version      0.1.0
 // @description  入出金の絞り込み、未分類の強調、←→キーでの月移動、広告の非表示、今風のデザイン
 // @match        https://moneyforward.com/*
