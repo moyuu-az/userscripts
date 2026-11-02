@@ -4,6 +4,8 @@ const {
   normalize, matchesQuery, isTypingTarget, isOwnMutation,
   resolveTheme, nextThemePref, parseRgb, luminance, classifyBg, classifyFg, isLightBorder, hasLightBorder,
   parseAmount, formatAmount, countUp, institutionOptions, spendLevels,
+  ratiosToMax, formatYenCompact, shortDateLabel, parseColor, seriesColor, isStackTop, netSeries,
+  keyAction, wrapBesideBars, styleChart,
 } = require('../moneyforward-me.user.js');
 
 test('normalize: 全角英数・カンマ・連続空白をそろえる', () => {
@@ -326,4 +328,230 @@ test('countUp: 動きを減らす設定・裏のタブ・金額でない文字�
   const same = amountEl('1,000円');
   countUp(same, '1,000円');
   assert.equal(frames.length, 1);
+});
+
+test('ratiosToMax: 最大を 1 にした比。0 と負は 0、全部 0 でも 0 で割らない', () => {
+  assert.deepEqual(ratiosToMax([12.14, 6.07, 0]), [1, 0.5, 0]);
+  assert.deepEqual(ratiosToMax([0, 0]), [0, 0]);
+  assert.deepEqual(ratiosToMax([-1, 2]), [0, 1]);
+  assert.deepEqual(ratiosToMax([]), []);
+});
+
+test('formatYenCompact: 1 万未満は桁区切り、万・億は小数 1 桁で丸める', () => {
+  assert.equal(formatYenCompact(0), '0');
+  assert.equal(formatYenCompact(9999), '9,999');
+  assert.equal(formatYenCompact(10000), '1万');
+  assert.equal(formatYenCompact(15000), '1.5万');
+  assert.equal(formatYenCompact(1234567), '123.5万');
+  assert.equal(formatYenCompact(-50000), '-5万');
+  assert.equal(formatYenCompact(120000000), '1.2億');
+});
+
+test('shortDateLabel: 日付は「月/日」、月次の「〜」付きは「N月」、それ以外はそのまま', () => {
+  assert.equal(shortDateLabel('2026/10/01'), '10/1');
+  assert.equal(shortDateLabel('2026-10-02'), '10/2');
+  assert.equal(shortDateLabel('2026/05/01〜'), '5月');
+  assert.equal(shortDateLabel('食費'), '食費');
+  assert.equal(shortDateLabel(3), 3);
+});
+
+test('parseColor: #rgb・#rrggbb・rgb()・rgba() を読み、読めなければ null', () => {
+  assert.deepEqual(parseColor('#DF4C52'), { r: 223, g: 76, b: 82, a: 1 });
+  assert.deepEqual(parseColor('#fff'), { r: 255, g: 255, b: 255, a: 1 });
+  assert.deepEqual(parseColor('rgba(40,129,215,0.9)'), { r: 40, g: 129, b: 215, a: 0.9 });
+  assert.deepEqual(parseColor('rgb(255, 127, 133)'), { r: 255, g: 127, b: 133, a: 1 });
+  assert.equal(parseColor('red'), null);
+  assert.equal(parseColor(undefined), null);
+});
+
+test('seriesColor: ダークでは暗い色だけを白へ寄せ、明るい色とライトはそのまま。透明度を指定できる', () => {
+  assert.equal(seriesColor('#DF4C52', false), 'rgba(223, 76, 82, 1)');
+  assert.equal(seriesColor('#DF4C52', true), 'rgba(223, 76, 82, 1)');
+  assert.equal(seriesColor('#4B4560', false), 'rgba(75, 69, 96, 1)');
+  assert.equal(seriesColor('#4B4560', true), 'rgba(147, 143, 160, 1)');
+  assert.equal(seriesColor('rgba(40,129,215,0.9)', false, 0.22), 'rgba(40, 129, 215, 0.22)');
+  assert.equal(seriesColor('red', true), 'red'); // 読めない色は触らない
+});
+
+test('isStackTop: 同じ積み上げの後ろに 0 でない見えている系列があれば一番上ではない', () => {
+  const ds = [
+    { stack: 'outgo', data: [1, 1] },
+    { stack: 'outgo', data: [2, 0] },
+    { stack: 'income', data: [5, 5] },
+  ];
+  assert.equal(isStackTop(ds, 0, 0), false); // 後ろの outgo が 2
+  assert.equal(isStackTop(ds, 0, 1), true); // 後ろの outgo が 0
+  assert.equal(isStackTop(ds, 1, 0), true);
+  assert.equal(isStackTop(ds, 2, 0), true); // 別の積み上げは見ない
+  assert.equal(isStackTop(ds, 0, 0, (j) => j !== 1), true); // 凡例で隠した系列は数えない
+  assert.equal(isStackTop([...ds, { stack: 'outgo', data: [9, 9], mfxNet: true }], 1, 0), true); // 収支の線は数えない
+});
+
+test('netSeries: 収入から支出の積み上げを引く。どちらかがなければ null', () => {
+  const ds = [
+    { stack: 'outgo', data: [100, 200] },
+    { stack: 'outgo', data: [50, null] },
+    { stack: 'income', data: [300, 100] },
+    { stack: 'mfx-net', data: [0, 0], mfxNet: true },
+  ];
+  assert.deepEqual(netSeries(ds), [150, -100]);
+  assert.equal(netSeries([{ stack: 'outgo', data: [1] }]), null);
+  assert.equal(netSeries([{ data: [1] }, { data: [2] }]), null); // 資産推移などの積み上げではない棒
+});
+
+test('keyAction: ← → は月移動、/ は検索欄へ。入力中・修飾キー・IME の変換中は何もしない', () => {
+  const body = { tagName: 'BODY' };
+  const other = { tagName: 'INPUT' };
+  const filter = { tagName: 'INPUT', value: '' };
+  const key = (k, extra = {}) => keyAction({ key: k, target: body, ...extra }, filter);
+  assert.equal(key('ArrowLeft'), 'prev');
+  assert.equal(key('ArrowRight'), 'next');
+  assert.equal(key('ArrowLeft', { shiftKey: true }), null); // Shift+← は選択の操作
+  assert.equal(key('ArrowLeft', { metaKey: true }), null);
+  assert.equal(key('ArrowLeft', { target: other }), null);
+  assert.equal(key('/'), 'focus');
+  assert.equal(key('/', { shiftKey: true }), 'focus'); // 「/」に Shift が要る配列
+  assert.equal(key('/', { ctrlKey: true }), null);
+  assert.equal(key('/', { target: other }), null);
+  assert.equal(keyAction({ key: '/', target: body }, null), null); // 検索欄のないページ
+  assert.equal(key('a'), null);
+  assert.equal(key('constructor'), null);
+});
+
+test('keyAction: 検索欄の Esc は語を消し、空なら抜ける。IME の変換を取り消す Esc では消さない', () => {
+  const filter = { tagName: 'INPUT', value: '食費' };
+  const esc = (extra = {}) => keyAction({ key: 'Escape', target: filter, ...extra }, filter);
+  assert.equal(esc(), 'clear');
+  assert.equal(esc({ shiftKey: true }), 'clear');
+  assert.equal(esc({ isComposing: true }), null);
+  assert.equal(esc({ keyCode: 229 }), null); // Safari は確定の直後の keydown が isComposing: false で 229
+  assert.equal(esc({ altKey: true }), null);
+  filter.value = '';
+  assert.equal(esc(), 'blur');
+  assert.equal(keyAction({ key: 'Escape', target: { tagName: 'BODY' } }, filter), null); // 欄の外の Esc は MF に任せる
+});
+
+test('wrapBesideBars: 幅のない要素（線の点）を除いて MF の位置決めに渡す。一度だけ包み、なければ何もしない', () => {
+  const calls = [];
+  const original = function (items, pos) {
+    calls.push({ self: this, items, pos });
+    return { x: 1, y: 2 };
+  };
+  const positioners = { besideBars: original };
+  wrapBesideBars(positioners);
+  const once = positioners.besideBars;
+  assert.notEqual(once, original);
+  wrapBesideBars(positioners);
+  assert.equal(positioners.besideBars, once); // 二重に包まない
+
+  const bar = { element: { width: 20 } };
+  const point = { element: { x: 5 } };
+  const self = {};
+  assert.deepEqual(once.call(self, [bar, point], { x: 0 }), { x: 1, y: 2 });
+  assert.deepEqual(calls[0].items, [bar]);
+  assert.equal(calls[0].self, self); // MF の関数はツールチップを this で読む
+  assert.deepEqual(calls[0].pos, { x: 0 });
+
+  // MF が後から besideBars を定義し直したら、新しいほうを包む
+  const redefined = () => 'new';
+  positioners.besideBars = redefined;
+  wrapBesideBars(positioners);
+  assert.equal(positioners.besideBars([point]), 'new');
+  assert.notEqual(positioners.besideBars, redefined);
+
+  assert.doesNotThrow(() => wrapBesideBars(undefined));
+  assert.doesNotThrow(() => wrapBesideBars({}));
+});
+
+// styleChart は画面の配色（CSS 変数）とテーマを読むので、その分だけを差し替える
+function chartEnv(t, { dark = false } = {}) {
+  const vars = { '--mfx-text': '#111', '--mfx-muted': '#666', '--mfx-border': '#ddd', '--mfx-surface': '#fff', '--mfx-plus': '#00f', '--mfx-minus': '#f00' };
+  globalThis.window = { matchMedia: () => ({ matches: false }) };
+  globalThis.document = { documentElement: { dataset: { mfxTheme: dark ? 'dark' : 'light' } } };
+  globalThis.getComputedStyle = () => ({ getPropertyValue: (name) => vars[name] ?? '' });
+  t.after(() => {
+    delete globalThis.window;
+    delete globalThis.document;
+    delete globalThis.getComputedStyle;
+  });
+}
+
+const monthlyChart = () => ({
+  config: {
+    type: 'bar',
+    options: { scales: { x: { stacked: true }, y: { stacked: true } } },
+    data: {
+      labels: ['2026/04/01〜', '2026/05/01〜'],
+      datasets: [
+        { label: '食費', stack: 'outgo', data: [100, 200], backgroundColor: '#4B4560' },
+        { label: '給与', stack: 'income', data: [300, 100], backgroundColor: '#2881D7' },
+      ],
+    },
+  },
+});
+
+test('styleChart: 何度呼んでも収支の線は 1 本で、色は MF の元の色から作り直す', (t) => {
+  chartEnv(t, { dark: true });
+  const chart = monthlyChart();
+  styleChart(chart);
+  const first = chart.config.data.datasets.map((ds) => ds.backgroundColor);
+  styleChart(chart);
+  styleChart(chart);
+  const { datasets } = chart.config.data;
+  assert.equal(datasets.filter((ds) => ds.mfxNet).length, 1);
+  assert.deepEqual(datasets.find((ds) => ds.mfxNet).data, [200, -100]);
+  assert.deepEqual(datasets.map((ds) => ds.backgroundColor), first);
+  assert.equal(datasets[0].mfxBg, '#4B4560');
+  assert.equal(datasets[0].backgroundColor, 'rgba(147, 143, 160, 1)'); // ダークで持ち上げた色。重ねて持ち上げない
+});
+
+test('styleChart: MF が月の切り替えで値や系列を差し替えても、収支の線を作り直す', (t) => {
+  chartEnv(t);
+  const chart = monthlyChart();
+  styleChart(chart);
+  const { data } = chart.config;
+  data.datasets[0].data = [500, 0];
+  styleChart(chart);
+  assert.deepEqual(data.datasets.find((ds) => ds.mfxNet).data, [-200, 100]);
+
+  data.datasets = [{ label: '食費', stack: 'outgo', data: [10] }, { label: '給与', stack: 'income', data: [30] }];
+  styleChart(chart);
+  assert.deepEqual(data.datasets.filter((ds) => ds.mfxNet).map((ds) => ds.data), [[20]]);
+
+  data.datasets = data.datasets.filter((ds) => ds.stack !== 'income'); // 収入のない月
+  styleChart(chart);
+  assert.deepEqual(data.datasets.find((ds) => ds.mfxNet).data, []);
+});
+
+test('styleChart: 収入・支出の 2 本の棒は、収支の線を足しても画面の青と赤にそろえる', (t) => {
+  chartEnv(t);
+  const chart = monthlyChart();
+  const [outgo, income] = chart.config.data.datasets;
+  outgo.label = '支出';
+  income.label = '収入';
+  styleChart(chart);
+  styleChart(chart);
+  assert.equal(chart.config.data.datasets.length, 3);
+  assert.equal(outgo.backgroundColor, 'rgba(255, 0, 0, 1)');
+  assert.equal(income.backgroundColor, 'rgba(0, 0, 255, 1)');
+});
+
+test('styleChart: 円グラフはドーナツにし、MF の系列ごとの cutout: 0 を外す。2 重なら穴を小さめに', (t) => {
+  chartEnv(t);
+  const chart = {
+    config: {
+      type: 'pie',
+      options: { plugins: { pieDataLabels: { enabled: true }, centerText: { text: '3円' } } },
+      data: { datasets: [{ data: [1, 2], backgroundColor: ['#fff', '#000'] }, { data: [3], cutout: 0, backgroundColor: ['#f00'] }] },
+    },
+  };
+  styleChart(chart);
+  styleChart(chart);
+  const { options, data } = chart.config;
+  assert.equal(options.cutout, '42%');
+  assert.equal('cutout' in data.datasets[1], false);
+  assert.equal(options.plugins.pieDataLabels.enabled, false);
+  assert.equal(options.plugins.centerText, false); // 穴の合計と重ならないよう、MF の中央の文字は止める
+  assert.deepEqual(data.datasets[0].backgroundColor, ['rgba(255, 255, 255, 1)', 'rgba(0, 0, 0, 1)']);
+  assert.equal(data.datasets.some((ds) => ds.mfxNet), false);
 });

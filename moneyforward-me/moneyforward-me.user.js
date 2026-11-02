@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MoneyForward ME Tweaks
 // @namespace    https://github.com/moyuu-az/userscripts
-// @version      0.3.0
+// @version      0.4.0
 // @description  サイドバーとダークモードのある見た目に作り直し、入出金の絞り込み・未分類の強調・←→キーでの月移動を足す
 // @match        https://moneyforward.com/*
 // @grant        none
@@ -186,7 +186,7 @@
     input = document.createElement('input');
     input.id = 'mfx-filter';
     input.type = 'search';
-    input.placeholder = '絞り込み（内容・カテゴリ・金額・メモ。空白区切りで AND）';
+    input.placeholder = '絞り込み（内容・カテゴリ・金額・メモ。空白区切りで AND）  / キーで移動、Esc で消去';
     input.setAttribute('aria-label', '入出金を絞り込む');
     const count = document.createElement('span');
     count.className = 'mfx-count';
@@ -320,16 +320,295 @@
   }
 
   function refresh() {
+    hookCharts();
+    paintShareBars();
     renderSummary();
     const input = ensureFilterBox();
-    if (!input) return;
-    const { shown, total, filtered } = applyRows(input.value);
-    setText(input.nextElementSibling, filtered ? `${shown} / ${total} 件` : '');
+    if (input) {
+      const { shown, total, filtered } = applyRows(input.value);
+      setText(input.nextElementSibling, filtered ? `${shown} / ${total} 件` : '');
+    }
     if (document.documentElement.classList.contains('mfx-cal-open')) paintSpendBars();
   }
 
+  // キー操作の振り分け。IME の変換中（Safari は確定の直後も keyCode 229）の Esc は変換の取り消しなので、検索語を消さない。
+  // 「/」は配列によって Shift と一緒に打つ（ドイツ語配列など）ので、Shift を見るのは ← → だけにする
+  function keyAction(e, filter) {
+    if (e.isComposing || e.keyCode === 229 || e.altKey || e.ctrlKey || e.metaKey) return null;
+    // 検索欄の中の Esc は語を消して全件に戻す（空なら欄から抜ける）
+    if (e.key === 'Escape') return filter && e.target === filter ? (filter.value ? 'clear' : 'blur') : null;
+    if (isTypingTarget(e.target)) return null;
+    if (e.key === '/') return filter ? 'focus' : null;
+    if (e.shiftKey) return null;
+    return e.key === 'ArrowLeft' ? 'prev' : e.key === 'ArrowRight' ? 'next' : null;
+  }
+
+  // --- 収支内訳の表: 割合の列に、いちばん大きい項目を全幅とした棒を敷く ---
+
+  function ratiosToMax(values) {
+    const max = Math.max(0, ...values);
+    return values.map((v) => (max > 0 && v > 0 ? v / max : 0));
+  }
+
+  function paintShareBars() {
+    for (const table of document.querySelectorAll('#table-outgo, #table-income')) {
+      const cells = [...table.querySelectorAll('tbody tr')]
+        .map((tr) => tr.cells[tr.cells.length - 1])
+        .filter((td) => /%$/.test(td?.textContent.trim() ?? ''));
+      ratiosToMax(cells.map((td) => parseFloat(td.textContent))).forEach((level, i) => {
+        cells[i].classList.add('mfx-share');
+        cells[i].style.setProperty('--mfx-share', `${(level * 100).toFixed(1)}%`);
+      });
+    }
+  }
+
+  // --- グラフ: MF は全ページ Chart.js 4 で描いているので、プラグインで見た目をまとめて差し替える ---
+
+  // 軸の目盛り。円の桁を全部出すと目盛りが幅を取るので、万・億で丸める
+  function formatYenCompact(n) {
+    const abs = Math.abs(n);
+    const round1 = (v) => String(Math.round(v * 10) / 10);
+    if (abs >= 1e8) return `${round1(n / 1e8)}億`;
+    if (abs >= 1e4) return `${round1(n / 1e4)}万`;
+    return n.toLocaleString('ja-JP');
+  }
+
+  // 横軸の「2026/10/01」は「10/1」、月次の「2026/05/01〜」は「5月」にして、斜めに傾けずに並べる
+  function shortDateLabel(label) {
+    const m = /^(\d{4})[/-](\d{1,2})[/-](\d{1,2})(〜)?$/.exec(String(label).trim());
+    if (!m) return label;
+    return m[4] ? `${Number(m[2])}月` : `${Number(m[2])}/${Number(m[3])}`;
+  }
+
+  function parseColor(value) {
+    const hex = /^#([\da-f]{3}|[\da-f]{6})$/i.exec(String(value ?? '').trim());
+    if (!hex) return parseRgb(String(value ?? '').replace(/\s+/g, ''));
+    const h = hex[1].length === 3 ? [...hex[1]].map((c) => c + c).join('') : hex[1];
+    return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16), a: 1 };
+  }
+
+  // MF の系列色のうち濃い灰色（交通費 #4B4560 など）は、ダークの地ではほぼ見えないので白へ寄せる
+  function seriesColor(value, dark, alpha = 1) {
+    const c = parseColor(value);
+    if (!c) return value;
+    const lift = dark && luminance(c) < 0.12 ? (v) => Math.round(v + (255 - v) * 0.4) : (v) => v;
+    return `rgba(${lift(c.r)}, ${lift(c.g)}, ${lift(c.b)}, ${alpha})`;
+  }
+
+  // 積み上げの棒で、その系列が一番上（見えている値のうち最後）かどうか。角を丸めるのは一番上の端だけにする
+  function isStackTop(datasets, datasetIndex, index, isVisible = () => true) {
+    const stack = datasets[datasetIndex].stack ?? '';
+    return !datasets.some((ds, j) => j > datasetIndex && (ds.stack ?? '') === stack && !ds.mfxNet && isVisible(j) && Number(ds.data[index]) !== 0);
+  }
+
+  // 月次推移の「収入」と支出の積み上げから、各月の収支を求める
+  function netSeries(datasets) {
+    const rows = datasets.filter((ds) => !ds.mfxNet && (ds.stack === 'income' || ds.stack === 'outgo'));
+    if (!rows.some((ds) => ds.stack === 'income') || !rows.some((ds) => ds.stack === 'outgo')) return null;
+    const length = Math.max(...rows.map((ds) => ds.data.length));
+    return Array.from({ length }, (_, i) =>
+      rows.reduce((sum, ds) => sum + (ds.stack === 'income' ? 1 : -1) * (Number(ds.data[i]) || 0), 0));
+  }
+
+  function chartTokens() {
+    const cs = getComputedStyle(document.documentElement);
+    const v = (name) => cs.getPropertyValue(name).trim();
+    return {
+      dark: document.documentElement.dataset.mfxTheme === 'dark',
+      text: v('--mfx-text'), muted: v('--mfx-muted'), grid: v('--mfx-border'), surface: v('--mfx-surface'),
+      plus: v('--mfx-plus'), minus: v('--mfx-minus'),
+    };
+  }
+
+  const isRoundChart = (chart) => chart.config.type === 'pie' || chart.config.type === 'doughnut';
+
+  // 何度呼んでも同じ結果になるように、MF の元の色は mfxBg に取っておき、そこから毎回作る
+  function styleChart(chart) {
+    const t = chartTokens();
+    const { options: o, data } = chart.config;
+    const round = isRoundChart(chart);
+    chart.canvas?.classList.add('mfx-chart');
+    if (reducedMotion()) o.animation = false;
+
+    const plugins = (o.plugins ??= {});
+    const tip = (plugins.tooltip ??= {});
+    Object.assign(tip, {
+      backgroundColor: t.surface, titleColor: t.text, bodyColor: t.text, footerColor: t.muted,
+      borderColor: t.grid, borderWidth: 1, cornerRadius: 10, padding: 10, boxPadding: 4, usePointStyle: true,
+      titleFont: { weight: '600' },
+    });
+    tip.callbacks ??= {};
+    if (typeof tip.callbacks.label !== 'function') {
+      tip.callbacks.label = (item) => ` ${round ? item.label : item.dataset.label}: ${formatAmount(Number(item.raw) || 0)}`;
+    }
+    const legend = (plugins.legend ??= {});
+    legend.labels = { ...legend.labels, color: t.text, usePointStyle: true, pointStyle: 'rectRounded', boxWidth: 8, boxHeight: 8, padding: 14 };
+    // MF の legendBorderBox は凡例を白い箱で囲む。ダークで白く浮き、ライトでも罫線が増えるだけなので外す
+    if (plugins.legendBorderBox) plugins.legendBorderBox.enabled = false;
+
+    if (round) {
+      // 2 重の円（収支内訳: 外が中項目、内が大項目）は輪を細くしすぎないよう穴を小さめにする
+      o.cutout = data.datasets.length > 1 ? '42%' : '64%';
+      // MF の円グラフは扇形の中に割合を白字で書くが、ドーナツの細い輪には収まらない。値はツールチップと横の表で読める
+      if (plugins.pieDataLabels) plugins.pieDataLabels.enabled = false;
+      // MF の centerText（穴の文字）は今の画面では使われていないが、指定されると合計の文字と重なる
+      if (plugins.centerText) plugins.centerText = false;
+    } else {
+      o.interaction = { mode: 'index', intersect: false };
+      tip.filter = (item) => Number(item.raw) !== 0 && item.raw != null;
+      // 収支の行を先頭に置き、残りは金額の大きい順
+      tip.itemSort = (a, b) => !!b.dataset.mfxNet - !!a.dataset.mfxNet || Math.abs(Number(b.raw)) - Math.abs(Number(a.raw));
+      for (const [id, scale] of Object.entries(o.scales ?? {})) {
+        const value = id.startsWith('y');
+        scale.grid = { ...scale.grid, display: value, color: t.grid, drawTicks: false };
+        scale.border = { ...scale.border, display: false };
+        scale.ticks = {
+          ...scale.ticks, color: t.muted, padding: 8, maxRotation: 0, autoSkipPadding: 16,
+          callback: value ? (v) => formatYenCompact(v) : function (v) { return shortDateLabel(this.getLabelForValue(v)); },
+        };
+      }
+    }
+
+    if (chart.config.type === 'bar') {
+      const net = netSeries(data.datasets);
+      let netDs = data.datasets.find((ds) => ds.mfxNet);
+      if (net && !netDs) {
+        netDs = { mfxNet: true, type: 'line', label: '収支', stack: 'mfx-net', order: -1 };
+        data.datasets.push(netDs);
+      }
+      if (netDs) netDs.data = net ?? [];
+    }
+
+    // 収支の線を足した後なので、MF の系列だけで数える
+    const own = data.datasets.filter((ds) => !ds.mfxNet);
+    const pair = own.length === 2 && own.some((ds) => ds.label === '収入') && own.some((ds) => ds.label === '支出');
+    data.datasets.forEach((ds, di) => {
+      if (ds.mfxNet) {
+        Object.assign(ds, {
+          // 曲線にすると点と点のあいだで実際にない値まで膨らむので、収支は直線でつなぐ
+          borderColor: t.text, backgroundColor: t.text, borderWidth: 2, tension: 0,
+          pointRadius: 3, pointHoverRadius: 5, pointBorderColor: t.surface, pointBorderWidth: 2,
+        });
+        return;
+      }
+      ds.mfxBg ??= ds.backgroundColor;
+      // ホームの収入・支出の 2 本は旧 Highcharts の既定色のままなので、画面の収入（青）・支出（赤）の色にそろえる
+      const base = !pair ? ds.mfxBg : ds.label === '収入' ? t.plus : ds.label === '支出' ? t.minus : ds.mfxBg;
+      const type = ds.type ?? chart.config.type;
+      if (round) {
+        // 収支内訳の内側の輪は MF が系列ごとに cutout: 0 を指定していて、全体の穴より優先される
+        delete ds.cutout;
+        Object.assign(ds, {
+          backgroundColor: Array.isArray(base) ? base.map((c) => seriesColor(c, t.dark)) : seriesColor(base, t.dark),
+          borderColor: t.surface, hoverBorderColor: t.surface, borderWidth: 2, borderRadius: 4, hoverOffset: 6,
+        });
+      } else if (type === 'line') {
+        // 積み上げの面は MF の指定（fill: true）だと全層が 0 から塗られ、半透明の色が重なって濁る。下の層との間だけを塗る
+        if (ds.fill && o.scales?.y?.stacked) ds.fill = di === 0 ? 'origin' : '-1';
+        Object.assign(ds, {
+          borderColor: seriesColor(base, t.dark), backgroundColor: seriesColor(base, t.dark, ds.fill ? 0.28 : 0),
+          borderWidth: 2, cubicInterpolationMode: 'monotone', pointRadius: 0, pointHoverRadius: 5,
+          pointHoverBorderColor: t.surface, pointHoverBorderWidth: 2, pointHoverBackgroundColor: seriesColor(base, t.dark),
+        });
+      } else if (type === 'bar') {
+        const stacked = !!o.scales?.x?.stacked || !!o.scales?.y?.stacked;
+        Object.assign(ds, {
+          backgroundColor: seriesColor(base, t.dark), maxBarThickness: 24, borderSkipped: 'start',
+          borderRadius: (ctx) => (isStackTop(ctx.chart.data.datasets, di, ctx.dataIndex, (j) => ctx.chart.isDatasetVisible(j)) ? 4 : 0),
+          // 積み上げの境目に地の色で 2px の隙間を入れる（枠線を描くと色の付いた線が増えて見づらい）
+          borderColor: t.surface, borderWidth: stacked ? { top: 2, right: 0, bottom: 0, left: 0 } : 0,
+        });
+      }
+    });
+  }
+
+  // ドーナツの穴に合計を書く。2 重の円は内側（大項目）の合計
+  function drawDonutTotal(chart) {
+    if (!isRoundChart(chart) || !chart.config.options.cutout) return;
+    const di = chart.data.datasets.length - 1;
+    const arcs = chart.getDatasetMeta(di).data;
+    if (!arcs.length) return;
+    const total = chart.data.datasets[di].data.reduce((sum, v, i) => sum + (chart.getDataVisibility(i) ? Number(v) || 0 : 0), 0);
+    if (!total) return;
+    const { x, y, innerRadius } = arcs[0].getProps(['x', 'y', 'innerRadius'], true);
+    const t = chartTokens();
+    const size = Math.max(12, Math.min(22, innerRadius * 0.2));
+    const { ctx } = chart;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = t.muted;
+    ctx.font = `12px ${CHART_FONT}`;
+    ctx.fillText('合計', x, y - size * 0.75);
+    ctx.fillStyle = t.text;
+    ctx.font = `700 ${size}px ${CHART_FONT}`;
+    ctx.fillText(formatAmount(total), x, y + size * 0.35);
+    ctx.restore();
+  }
+
+  // MF の位置決め besideBars は棒の幅から位置を出すので、収支の線の点（幅なし）が混ざると NaN になって表示されない。
+  // MF は Chart.js を読み込んだ後で besideBars を足すので、document-start で登録した時点にはまだない。
+  // ツールチップが位置を求めるのはマウスの操作（beforeEvent の後）なので、そのたびに確かめて一度だけ包む
+  function wrapBesideBars(positioners) {
+    const beside = positioners?.besideBars;
+    if (typeof beside !== 'function' || beside.mfxWrapped) return;
+    const wrapped = function (items, pos) {
+      return beside.call(this, items.filter((item) => Number.isFinite(item.element?.width)), pos);
+    };
+    wrapped.mfxWrapped = true;
+    positioners.besideBars = wrapped;
+  }
+
+  const CHART_FONT = 'system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif';
+  let chartsHooked = false;
+
+  // MF の Chart.js は本文の最後で読み込まれるので、見つかった時点でプラグインを登録し、描画済みのグラフも塗り直す
+  function hookCharts() {
+    const Chart = window.Chart;
+    if (chartsHooked || typeof Chart?.register !== 'function' || !Chart.instances) return;
+    chartsHooked = true;
+    // beforeInit で最初の描画から反映する。beforeUpdate はデータの差し替え（月の切り替え）で増えた系列と収支の線のため。
+    // 合計の文字は afterDatasetsDraw で書く。afterDraw だとツールチップ（Tooltip の afterDraw）の上に重なる
+    Chart.register({
+      id: 'mfx', beforeInit: styleChart, beforeUpdate: styleChart, afterDatasetsDraw: drawDonutTotal,
+      beforeEvent: () => wrapBesideBars(Chart.Tooltip?.positioners),
+    });
+    restyleCharts();
+  }
+
+  // MF の Chart.js（UMD）は window.Chart に代入される。代入の瞬間にプラグインを登録すれば、MF の配色で一度描いてから
+  // 塗り直す（ちらつく）ことがない。書き換えられないときは refresh() の hookCharts が後から拾う
+  function watchChartLib() {
+    let lib = window.Chart;
+    try {
+      Object.defineProperty(window, 'Chart', {
+        configurable: true, enumerable: true,
+        get: () => lib,
+        set(value) {
+          lib = value;
+          hookCharts();
+        },
+      });
+    } catch {
+      // refresh() に任せる
+    }
+  }
+
+  function restyleCharts() {
+    const Chart = window.Chart;
+    if (!chartsHooked) return;
+    Chart.defaults.font.family = CHART_FONT;
+    Chart.defaults.color = chartTokens().muted;
+    // update() は beforeUpdate より前に目盛りの設定を読み終えるので、先に書き換えてから描き直す
+    for (const chart of Object.values(Chart.instances)) {
+      styleChart(chart);
+      chart.update('none');
+    }
+  }
+
   function clickMonthButton(direction) {
-    const btn = document.querySelector(direction < 0 ? '.fc-button-prev' : '.fc-button-next');
+    // 入出金のカレンダーと、収支内訳の「前月」「次月」
+    const btn = document.querySelector(direction < 0 ? '.fc-button-prev, #b_range' : '.fc-button-next, #n_range');
     if (!btn) return false;
     btn.click();
     return true;
@@ -518,6 +797,7 @@
     document.documentElement.dataset.mfxTheme = theme;
     if (theme === 'dark' && document.body) darkify([document.body]);
     updateThemeToggle();
+    restyleCharts();
   }
 
   const STYLE = `
@@ -720,8 +1000,9 @@
     html[data-mfx-theme="dark"] .mfx-dk-fgt { color: var(--mfx-dk-fg) !important; }
     html[data-mfx-theme="dark"] .mfx-dk-bd { border-color: var(--mfx-border) !important; }
     html[data-mfx-theme="dark"] .right-nav img[src*="icon_bell"] { filter: brightness(0) invert(.85); }
-    /* グラフは canvas に描かれていて CSS で色を変えられないので、明暗だけを反転する（色相は 180 度回して元の色味に戻す） */
-    html[data-mfx-theme="dark"] #wrap canvas { filter: invert(1) hue-rotate(180deg); }
+    /* Chart.js のグラフ（.mfx-chart）は配色を直接差し替える。それ以外の canvas は CSS で色を変えられないので、
+       明暗だけを反転する（色相は 180 度回して元の色味に戻す） */
+    html[data-mfx-theme="dark"] #wrap canvas:not(.mfx-chart) { filter: invert(1) hue-rotate(180deg); }
     /* 予算の進捗バーの地は白い画像なので、色の判定では拾えない */
     html[data-mfx-theme="dark"] .progress { background-image: none !important; }
 
@@ -769,6 +1050,11 @@
     #mfx-filter:focus { background: var(--mfx-surface) !important; }
     .mfx-count { color: var(--mfx-muted); font-variant-numeric: tabular-nums; }
     .mfx-inst-box { margin-top: 4px; }
+    /* 収支内訳の割合の列。文字の読みやすさを保つため、棒は薄い色にする */
+    td.mfx-share {
+      background-image: linear-gradient(to right, color-mix(in srgb, var(--mfx-minus) 22%, transparent) var(--mfx-share), transparent 0) !important;
+      font-variant-numeric: tabular-nums;
+    }
     #mfx-inst { width: 100%; max-width: 180px; height: 28px; padding: 0 6px; font-size: 12px; font-weight: 400; }
 
     /* アニメーション。OS で「視差効果を減らす」を選んでいる人には動かさない。
@@ -812,9 +1098,16 @@
     applyTheme();
 
     document.addEventListener('keydown', (e) => {
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-      if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || isTypingTarget(e.target)) return;
-      if (clickMonthButton(e.key === 'ArrowLeft' ? -1 : 1)) e.preventDefault();
+      const filter = document.querySelector('#mfx-filter');
+      const action = keyAction(e, filter);
+      if (action === 'clear') {
+        filter.value = '';
+        refresh();
+      } else if (action === 'blur') filter.blur();
+      else if (action === 'focus') {
+        e.preventDefault();
+        filter.focus();
+      } else if (action && clickMonthButton(action === 'prev' ? -1 : 1)) e.preventDefault();
     });
 
     // 月の切り替えやカテゴリ編集で表が Ajax で差し替わるので、そのたびに付け直す。ダークモード中は足された要素の色も直す
@@ -850,6 +1143,7 @@
     darkQuery.addEventListener('change', () => {
       if (readThemePref() === 'auto') applyTheme();
     });
+    watchChartLib();
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', onReady, { once: true });
     else onReady();
@@ -860,6 +1154,8 @@
       normalize, matchesQuery, isTypingTarget, isOwnMutation,
       resolveTheme, nextThemePref, parseRgb, luminance, classifyBg, classifyFg, isLightBorder, hasLightBorder,
       parseAmount, formatAmount, countUp, institutionOptions, spendLevels,
+      ratiosToMax, formatYenCompact, shortDateLabel, parseColor, seriesColor, isStackTop, netSeries,
+      keyAction, wrapBesideBars, styleChart,
     };
   } else {
     main();
