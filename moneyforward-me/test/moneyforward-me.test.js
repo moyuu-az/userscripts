@@ -132,6 +132,19 @@ test('classifyBg: 白は面の色、薄い灰色は一段明るい面、色付�
   assert.deepEqual(classifyBg(parseRgb('rgb(252, 248, 227)')), { cls: 'mfx-dk-bgt', value: 'rgba(252, 248, 227, 0.16)' });
 });
 
+test('classifyBg: 月次の合計行は、彩度がやや高い淡い色でも半透明にして文字を読めるようにする', () => {
+  // 支出合計の行（#ffcea3、彩度 0.36）を残すと、明るくした文字と重なって読めなくなる
+  assert.deepEqual(classifyBg(parseRgb('rgb(255, 206, 163)')), { cls: 'mfx-dk-bgt', value: 'rgba(255, 206, 163, 0.16)' });
+  // 収入合計の行（#c8e8f7）
+  assert.deepEqual(classifyBg(parseRgb('rgb(200, 232, 247)')), { cls: 'mfx-dk-bgt', value: 'rgba(200, 232, 247, 0.16)' });
+});
+
+test('classifyBg: 鮮やかなバーの色はそのまま', () => {
+  for (const color of ['rgb(240, 173, 78)', 'rgb(92, 184, 92)', 'rgb(217, 83, 79)', 'rgb(255, 127, 80)']) {
+    assert.equal(classifyBg(parseRgb(color)), null, color);
+  }
+});
+
 test('classifyBg: 透明・暗い色・濃い色の背景はそのまま', () => {
   assert.equal(classifyBg(parseRgb('rgba(0, 0, 0, 0)')), null);
   assert.equal(classifyBg(parseRgb('rgb(51, 51, 51)')), null);
