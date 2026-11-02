@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MoneyForward ME Tweaks
 // @namespace    https://github.com/moyuu-az/userscripts
-// @version      0.4.0
+// @version      0.4.1
 // @description  サイドバーとダークモードのある見た目に作り直し、入出金の絞り込み・未分類の強調・←→キーでの月移動を足す
 // @match        https://moneyforward.com/*
 // @grant        none
@@ -77,8 +77,10 @@
   function classifyBg(c) {
     // 0.55 は #c3c3c3 あたり。カレンダーの前月・翌月のマス（#ddd、0.72）まで拾える値にしている
     if (!c || c.a === 0 || luminance(c) <= 0.55) return null;
-    // 彩度の高い色（予算の進捗バーなど）は明るくても意味のある色なので残し、淡いパステル調の背景だけを薄める
-    if (saturation(c) >= 0.35) return null;
+    // 彩度の高い色（予算の進捗バーなど）は明るくても意味のある色なので残し、淡いパステル調の背景だけを薄める。
+    // 0.45 は支出合計の行（#ffcea3、0.36）を薄め、予算の進捗バー（#9edc6f、0.49）を残す境目。
+    // 0.35 だと支出合計の行が明るいまま残り、明るくした文字と重なって読めなかった
+    if (saturation(c) >= 0.45) return null;
     if (saturation(c) >= 0.08) return { cls: 'mfx-dk-bgt', value: `rgba(${c.r}, ${c.g}, ${c.b}, 0.16)` };
     return { cls: luminance(c) > 0.95 ? 'mfx-dk-bg1' : 'mfx-dk-bg2' };
   }
