@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MoneyForward ME Tweaks
 // @namespace    https://github.com/moyuu-az/userscripts
-// @version      0.4.1
+// @version      0.4.2
 // @description  サイドバーとダークモードのある見た目に作り直し、入出金の絞り込み・未分類の強調・←→キーでの月移動を足す
 // @match        https://moneyforward.com/*
 // @grant        none
