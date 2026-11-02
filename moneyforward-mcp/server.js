@@ -55,7 +55,11 @@ server.registerTool('set_calc_target', {
 
 server.registerTool('set_transfer', {
   title: '振替にする',
-  description: '取引を振替にし、振替先として相手側の入出金（partnerId）を結びつける。MF の画面から振替を解除すれば元に戻せる。',
+  description: [
+    '取引を振替にし、振替先として相手側の入出金（partnerId）を結びつける。MF の画面から振替を解除すれば元に戻せる。',
+    '結果は読み込み直して確かめた値で返す（ok / already / not_saved / partner_not_set）。',
+    'partner_not_set は振替にはなったが振替先が結べていない状態で、相手側の取引だけが集計に残っている。同じ指定でもう一度実行すると続きから設定する。',
+  ].join('\n'),
   inputSchema: { month, id, partnerMonth: month.optional(), partnerId: id },
   annotations: { destructiveHint: false, idempotentHint: true },
 }, ({ month: m, id: i, partnerMonth, partnerId }) => run(async () => json(await mf.setTransfer(m, i, partnerMonth ?? m, partnerId))));

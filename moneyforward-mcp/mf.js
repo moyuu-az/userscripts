@@ -26,10 +26,17 @@ export async function isLoggedIn() {
 
 let ctxPromise = null;
 async function getPage() {
-  ctxPromise ??= launch().catch((e) => {
-    ctxPromise = null; // 失敗した起動を使い回さない（npm run login の画面が開いたままだとプロファイルが使えない）
-    throw new Error(`Chrome を起動できません。npm run login のウィンドウが開いていたら閉じてください。(${e.message})`);
-  });
+  if (!ctxPromise) {
+    const p = launch().then((ctx) => {
+      // 利用者が Chrome を終了したら次の呼び出しで起動し直す。閉じた context を持ち続けると、サーバを再起動するまで全ツールが失敗する
+      ctx.on('close', () => { if (ctxPromise === p) ctxPromise = null; });
+      return ctx;
+    }, (e) => {
+      ctxPromise = null; // 失敗した起動を使い回さない（npm run login の画面が開いたままだとプロファイルが使えない）
+      throw new Error(`Chrome を起動できません。npm run login のウィンドウが開いていたら閉じてください。(${e.message})`);
+    });
+    ctxPromise = p;
+  }
   const ctx = await ctxPromise;
   return ctx.pages()[0] ?? ctx.newPage();
 }
@@ -117,25 +124,33 @@ function audit(entry) {
 export async function setCalcTarget(month, ids, target) {
   let page = await openCf();
   await gotoMonth(page, month);
-  const sent = await page.evaluate(async ({ ids, target }) => {
-    const out = {};
-    for (const id of ids) {
-      const form = document.querySelector(`#js-transaction-${id} form`);
-      if (!form?.querySelector('#user_asset_act_is_target')) { out[id] = 'not_found'; continue; }
-      const $f = window.jQuery(form);
-      $f.find('#user_asset_act_is_target').val(target ? 1 : 0);
-      $f.find('#user_asset_act_large_category_id, #user_asset_act_middle_category_id').val('');
-      out[id] = await new Promise((res) => {
-        window.jQuery.put(form.getAttribute('action'), $f.serialize(), null, 'text')
-          .done(() => res('sent')).fail((x) => res(`http_${x.status}`));
-      });
-    }
-    return out;
-  }, { ids, target });
+  let sent;
+  let after;
+  try {
+    sent = await page.evaluate(async ({ ids, target }) => {
+      const out = {};
+      for (const id of ids) {
+        const form = document.querySelector(`#js-transaction-${id} form`);
+        if (!form?.querySelector('#user_asset_act_is_target')) { out[id] = 'not_found'; continue; }
+        const $f = window.jQuery(form);
+        $f.find('#user_asset_act_is_target').val(target ? 1 : 0);
+        $f.find('#user_asset_act_large_category_id, #user_asset_act_middle_category_id').val('');
+        out[id] = await new Promise((res) => {
+          window.jQuery.put(form.getAttribute('action'), $f.serialize(), null, 'text')
+            .done(() => res('sent')).fail((x) => res(`http_${x.status}`));
+        });
+      }
+      return out;
+    }, { ids, target });
 
-  // 送れたかではなく、読み込み直して保存された値で判定する
-  page = await openCf();
-  const after = new Map((await readMonth(page, month)).map((r) => [r.id, r]));
+    // 送れたかではなく、読み込み直して保存された値で判定する
+    page = await openCf();
+    after = new Map((await readMonth(page, month)).map((r) => [r.id, r]));
+  } catch (e) {
+    // 送信の途中や確認の前に止まると、一部だけ保存されていることがある。止まった時点を記録し、やり直せることを伝える
+    audit({ op: 'set_calc_target', month, target, ids, sent, error: e.message });
+    throw new Error(`計算対象の切り替えが途中で止まりました。一部だけ保存されたかもしれません。同じ指定でもう一度実行すれば、そろえて確かめ直します。(${e.message})`);
+  }
   const want = target ? '1' : '0';
   const results = ids.map((id) => ({
     id,
@@ -145,6 +160,9 @@ export async function setCalcTarget(month, ids, target) {
   return results;
 }
 
+// 振替先が決まっていない振替には「未設定」のリンクが出る。済んだかどうかの判定と、保存の確認の両方でこれを見る
+const partnerUnset = async (page, id) => Boolean(await page.$(`#change_act_type_${id}`));
+
 // 取引を振替にし、振替先に相手側の入出金を結びつける。MF の画面の操作をそのままなぞる
 export async function setTransfer(month, id, partnerMonth, partnerId) {
   let page = await openCf();
@@ -152,7 +170,7 @@ export async function setTransfer(month, id, partnerMonth, partnerId) {
   const self = (await readMonth(page, month)).find((r) => r.id === id);
   if (!self) throw new Error(`取引 ${id} が ${month} にありません`);
   // 振替済みの行の切り替えアイコンは「振替を解除」なので、振替先まで決まっていたら何もしない（相手の行はまとめられて見えない）
-  if (self.transfer && !await page.$(`#change_act_type_${id}`)) {
+  if (self.transfer && !await partnerUnset(page, id)) {
     audit({ op: 'set_transfer', month, id, partnerId, result: 'already' });
     return { id, partnerId, result: 'already' };
   }
@@ -197,10 +215,14 @@ export async function setTransfer(month, id, partnerMonth, partnerId) {
     await Promise.all([page.waitForResponse((r) => r.url().includes('/cf/update') && r.request().method() !== 'GET'), page.click('#submit-button_type')]);
   });
 
-  page = await openCf();
-  const after = await readMonth(page, month);
-  const ok = after.find((r) => r.id === id)?.transfer && (partnerMonth !== month || !after.some((r) => r.id === partnerId));
-  const result = ok ? 'ok' : 'not_saved';
+  // 振替にだけなって振替先が結べていないと、この取引は集計から消え、相手側だけが残る。ok と区別して返す
+  const result = await step('保存の確認', async () => {
+    page = await openCf();
+    const after = await readMonth(page, month);
+    if (!after.find((r) => r.id === id)?.transfer) return 'not_saved';
+    if (await partnerUnset(page, id)) return 'partner_not_set';
+    return partnerMonth !== month || !after.some((r) => r.id === partnerId) ? 'ok' : 'not_saved';
+  });
   audit({ op: 'set_transfer', month, id, partnerMonth, partnerId, result });
   return { id, partnerId, result };
 }
