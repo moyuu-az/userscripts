@@ -83,6 +83,20 @@ test('二重の連携: 一致が 3 件未満、または 9 割未満なら別の
   assert.deepEqual(kinds(rows), []);
 });
 
+test('二重の連携: 98% 未満の一致（家族の Suica が同じ区間を通る程度）は外さない', () => {
+  const rows = [];
+  for (let i = 1; i <= 20; i++) {
+    const date = `2026/06/${String(i).padStart(2, '0')}`;
+    rows.push(suica(SID, date, -253, '入 立川 出 東小金井'));
+    // 20 件中 1 件だけ違う（95%）
+    rows.push(suica(JRE, date, i === 10 ? -300 : -253, i === 10 ? '入 立川 出 新宿' : '入 立川 出 東小金井'));
+  }
+  assert.deepEqual(kinds(rows), []);
+  // 全件一致なら重複とみなす
+  rows[19] = suica(JRE, '2026/06/10', -253, '入 立川 出 東小金井');
+  assert.equal(findDuplicates(rows).length, 20);
+});
+
 test('通販とカード: 品物・ポイント・クーポンの合計がカードの 1 件と一致したらカード側を外す', () => {
   const y = 'Yahoo!ショッピング Yahoo!ショッピング';
   const item = row({ date: '2026/09/12', amount: -15400, account: y, content: 'リカバリーウェア' });

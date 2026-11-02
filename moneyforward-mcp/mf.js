@@ -176,7 +176,8 @@ export async function setTransfer(month, id, partnerMonth, partnerId) {
   }
   const partner = (await readMonth(page, partnerMonth)).find((r) => r.id === partnerId);
   if (!partner) throw new Error(`振替先の取引 ${partnerId} が ${partnerMonth} にありません`);
-  if (Math.sign(self.amount) === Math.sign(partner.amount)) throw new Error('出金と入金の組み合わせではありません');
+  // 取り違えた partnerId で、額の違う本物の入出金を一覧から消さないよう、同じ額の出金と入金に限る
+  if (self.amount !== -partner.amount) throw new Error(`同じ額の出金と入金の組み合わせではありません（${self.amount} と ${partner.amount}）`);
   await gotoMonth(page, month);
 
   const step = async (label, fn) => {
@@ -190,7 +191,7 @@ export async function setTransfer(month, id, partnerMonth, partnerId) {
     if (!link?.includes('change_type=enable_transfer')) throw new Error(`取引 ${id} を振替に切り替えるアイコンがありません`);
     await step('振替に切り替え', async () => {
       await page.click(`${row} .js-switch-transfer`);
-      const proceed = page.locator(`.js-transfer-switch-dialog-btn-proceed[href*="id=${id}"]`);
+      const proceed = page.locator(`.js-transfer-switch-dialog-btn-proceed[href$="&id=${id}"]`);
       await Promise.all([page.waitForResponse((r) => r.url().includes('change_type=enable_transfer')), proceed.click()]);
     });
   }

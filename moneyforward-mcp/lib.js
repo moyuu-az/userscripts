@@ -56,9 +56,10 @@ function ownTransfers(rows) {
 }
 
 // 同じ取引が 2 つの連携に入っている（例: モバイル Suica を 2 つの ID で連携）。
-// 期間が重なる中で、一方の取引の 9 割以上がもう一方と日付・金額・内容まで一致したら、その連携を重複とみなす
+// 期間が重なる中で、両方の取引の 98% 以上が日付・金額・内容まで一致したら、その連携を重複とみなす。
+// 同じカードの二重連携ならほぼ 100% 一致する。家族の Suica が同じ区間を毎日通る程度では外さないよう高めにしている
 const MIN_LINK_MATCHES = 3;
-const LINK_RATIO = 0.9;
+const LINK_RATIO = 0.98;
 
 function duplicateLinks(rows) {
   const byAcc = new Map();
