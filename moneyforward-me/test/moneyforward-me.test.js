@@ -5,7 +5,7 @@ const {
   resolveTheme, nextThemePref, parseRgb, luminance, classifyBg, classifyFg, isLightBorder, hasLightBorder,
   parseAmount, formatAmount, countUp, institutionOptions, spendLevels,
   ratiosToMax, formatYenCompact, shortDateLabel, parseColor, seriesColor, isStackTop, netSeries,
-  keyAction, wrapBesideBars, styleChart,
+  keyAction, isModalOpen, wrapBesideBars, styleChart,
 } = require('../moneyforward-me.user.js');
 
 test('normalize: 全角英数・カンマ・連続空白をそろえる', () => {
@@ -442,6 +442,41 @@ test('keyAction: 検索欄の Esc は語を消し、空なら抜ける。IME の
   filter.value = '';
   assert.equal(esc(), 'blur');
   assert.equal(keyAction({ key: 'Escape', target: { tagName: 'BODY' } }, filter), null); // 欄の外の Esc は MF に任せる
+});
+
+test('keyAction: MF のダイアログが開いている間は ← → / を奪わない。検索欄の Esc はそのまま', () => {
+  const body = { tagName: 'BODY' };
+  const filter = { tagName: 'INPUT', value: '食費' };
+  const key = (k, target = body) => keyAction({ key: k, target }, filter, true);
+  assert.equal(key('ArrowLeft'), null);
+  assert.equal(key('ArrowRight'), null);
+  assert.equal(key('/'), null);
+  assert.equal(key('Escape', filter), 'clear');
+  filter.value = '';
+  assert.equal(key('Escape', filter), 'blur');
+  assert.equal(keyAction({ key: 'ArrowLeft', target: body }, filter, false), 'prev');
+});
+
+test('isModalOpen: 表示中の .modal か .modal-backdrop があるときだけ真。in クラスの有無は見ない', (t) => {
+  let modals = [];
+  let backdrops = [];
+  globalThis.document = {
+    querySelectorAll: (sel) => (sel === '.modal, .modal-backdrop' ? [...modals, ...backdrops] : []),
+  };
+  globalThis.getComputedStyle = (el) => ({ display: el.display });
+  t.after(() => {
+    delete globalThis.document;
+    delete globalThis.getComputedStyle;
+  });
+  assert.equal(isModalOpen(), false); // ダイアログのないページ
+  modals = [{ display: 'none' }, { display: 'none' }];
+  assert.equal(isModalOpen(), false); // 閉じたダイアログは DOM に残っている
+  modals = [{ display: 'none' }, { display: 'block' }]; // #modal_change_act_type は in なしで display: block になる
+  assert.equal(isModalOpen(), true);
+  // 開き始め: 幕だけが出ていて、.modal はまだ display: none
+  modals = [{ display: 'none' }];
+  backdrops = [{ display: 'block' }];
+  assert.equal(isModalOpen(), true);
 });
 
 test('wrapBesideBars: 幅のない要素（線の点）を除いて MF の位置決めに渡す。一度だけ包み、なければ何もしない', () => {

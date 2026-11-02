@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MoneyForward ME Tweaks
 // @namespace    https://github.com/moyuu-az/userscripts
-// @version      0.4.1
+// @version      0.4.2
 // @description  サイドバーとダークモードのある見た目に作り直し、入出金の絞り込み・未分類の強調・←→キーでの月移動を足す
 // @match        https://moneyforward.com/*
 // @grant        none
@@ -335,14 +335,21 @@
 
   // キー操作の振り分け。IME の変換中（Safari は確定の直後も keyCode 229）の Esc は変換の取り消しなので、検索語を消さない。
   // 「/」は配列によって Shift と一緒に打つ（ドイツ語配列など）ので、Shift を見るのは ← → だけにする
-  function keyAction(e, filter) {
+  function keyAction(e, filter, modalOpen = false) {
     if (e.isComposing || e.keyCode === 229 || e.altKey || e.ctrlKey || e.metaKey) return null;
     // 検索欄の中の Esc は語を消して全件に戻す（空なら欄から抜ける）
     if (e.key === 'Escape') return filter && e.target === filter ? (filter.value ? 'clear' : 'blur') : null;
-    if (isTypingTarget(e.target)) return null;
+    // MF のダイアログが開いている間は、裏の月を動かしたり検索欄へ移ったりしない
+    if (modalOpen || isTypingTarget(e.target)) return null;
     if (e.key === '/') return filter ? 'focus' : null;
     if (e.shiftKey) return null;
     return e.key === 'ArrowLeft' ? 'prev' : e.key === 'ArrowRight' ? 'next' : null;
+  }
+
+  // MF のダイアログ（Bootstrap 2 の .modal）は閉じても DOM に残る。in クラスを付けずに開くもの（振替先の入力など）もあるので、表示されているかで見る。
+  // Bootstrap 2 は背景の幕（.modal-backdrop）が出終わるまで .modal を表示しない（約 150ms）。その間のキーも止めるため、幕も見る
+  function isModalOpen() {
+    return [...document.querySelectorAll('.modal, .modal-backdrop')].some((m) => getComputedStyle(m).display !== 'none');
   }
 
   // --- 収支内訳の表: 割合の列に、いちばん大きい項目を全幅とした棒を敷く ---
@@ -1101,7 +1108,7 @@
 
     document.addEventListener('keydown', (e) => {
       const filter = document.querySelector('#mfx-filter');
-      const action = keyAction(e, filter);
+      const action = keyAction(e, filter, isModalOpen());
       if (action === 'clear') {
         filter.value = '';
         refresh();
@@ -1157,7 +1164,7 @@
       resolveTheme, nextThemePref, parseRgb, luminance, classifyBg, classifyFg, isLightBorder, hasLightBorder,
       parseAmount, formatAmount, countUp, institutionOptions, spendLevels,
       ratiosToMax, formatYenCompact, shortDateLabel, parseColor, seriesColor, isStackTop, netSeries,
-      keyAction, wrapBesideBars, styleChart,
+      keyAction, isModalOpen, wrapBesideBars, styleChart,
     };
   } else {
     main();
