@@ -139,10 +139,10 @@ test('classifyBg: 月次の合計行は、彩度がやや高い淡い色でも�
   assert.deepEqual(classifyBg(parseRgb('rgb(200, 232, 247)')), { cls: 'mfx-dk-bgt', value: 'rgba(200, 232, 247, 0.16)' });
 });
 
-test('classifyBg: 鮮やかなバーの色はそのまま', () => {
-  for (const color of ['rgb(240, 173, 78)', 'rgb(92, 184, 92)', 'rgb(217, 83, 79)', 'rgb(255, 127, 80)']) {
-    assert.equal(classifyBg(parseRgb(color)), null, color);
-  }
+test('classifyBg: 明るい背景は彩度 0.45 以上なら残し、それ未満なら半透明にする', () => {
+  // どちらも輝度 0.8 前後の明るい色なので、輝度ではなく彩度のしきい値だけで分かれる
+  assert.equal(classifyBg(parseRgb('rgb(240, 240, 132)')), null); // 彩度 0.45 ちょうど
+  assert.deepEqual(classifyBg(parseRgb('rgb(240, 240, 133)')), { cls: 'mfx-dk-bgt', value: 'rgba(240, 240, 133, 0.16)' }); // 0.446
 });
 
 test('classifyBg: 透明・暗い色・濃い色の背景はそのまま', () => {
