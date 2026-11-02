@@ -346,9 +346,10 @@
     return e.key === 'ArrowLeft' ? 'prev' : e.key === 'ArrowRight' ? 'next' : null;
   }
 
-  // MF のダイアログ（Bootstrap 2 の .modal）は閉じても DOM に残る。in クラスを付けずに開くもの（振替先の入力など）もあるので、表示されているかで見る
+  // MF のダイアログ（Bootstrap 2 の .modal）は閉じても DOM に残る。in クラスを付けずに開くもの（振替先の入力など）もあるので、表示されているかで見る。
+  // Bootstrap 2 は背景の幕（.modal-backdrop）が出終わるまで .modal を表示しない（約 150ms）。その間のキーも止めるため、幕も見る
   function isModalOpen() {
-    return [...document.querySelectorAll('.modal')].some((m) => getComputedStyle(m).display !== 'none');
+    return [...document.querySelectorAll('.modal, .modal-backdrop')].some((m) => getComputedStyle(m).display !== 'none');
   }
 
   // --- 収支内訳の表: 割合の列に、いちばん大きい項目を全幅とした棒を敷く ---

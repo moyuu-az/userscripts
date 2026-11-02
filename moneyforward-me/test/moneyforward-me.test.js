@@ -457,9 +457,12 @@ test('keyAction: MF のダイアログが開いている間は ← → / を奪�
   assert.equal(keyAction({ key: 'ArrowLeft', target: body }, filter, false), 'prev');
 });
 
-test('isModalOpen: 表示中の .modal があるときだけ真。in クラスの有無は見ない', (t) => {
+test('isModalOpen: 表示中の .modal か .modal-backdrop があるときだけ真。in クラスの有無は見ない', (t) => {
   let modals = [];
-  globalThis.document = { querySelectorAll: (sel) => (sel === '.modal' ? modals : []) };
+  let backdrops = [];
+  globalThis.document = {
+    querySelectorAll: (sel) => (sel === '.modal, .modal-backdrop' ? [...modals, ...backdrops] : []),
+  };
   globalThis.getComputedStyle = (el) => ({ display: el.display });
   t.after(() => {
     delete globalThis.document;
@@ -469,6 +472,10 @@ test('isModalOpen: 表示中の .modal があるときだけ真。in クラス�
   modals = [{ display: 'none' }, { display: 'none' }];
   assert.equal(isModalOpen(), false); // 閉じたダイアログは DOM に残っている
   modals = [{ display: 'none' }, { display: 'block' }]; // #modal_change_act_type は in なしで display: block になる
+  assert.equal(isModalOpen(), true);
+  // 開き始め: 幕だけが出ていて、.modal はまだ display: none
+  modals = [{ display: 'none' }];
+  backdrops = [{ display: 'block' }];
   assert.equal(isModalOpen(), true);
 });
 
