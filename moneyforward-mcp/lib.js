@@ -141,3 +141,70 @@ function shopVsCard(rows) {
 export function findDuplicates(rows) {
   return [...ownTransfers(rows), ...duplicateLinks(rows), ...shopVsCard(rows)];
 }
+
+// ---- 予算 ----
+
+// "154,688円" / "-9,591円" → 数値。読めないときは 0 にせず null を返す（予算 0 円と取り違えない）
+export function yen(text) {
+  const m = /-?\d[\d,]*/.exec(text ?? '');
+  return m ? Number(m[0].replaceAll(',', '')) : null;
+}
+
+// 予算のページは「今月から何か月前か」で月を指す
+export function monthsAgo(month, now = new Date()) {
+  const [y, m] = month.split('-').map(Number);
+  return (now.getFullYear() - y) * 12 + now.getMonth() + 1 - m;
+}
+
+const broken = (what) => new Error(`${what}が読めません。画面の作りが変わった可能性があります。`);
+
+// 「今月の予算」の表。画面には使った金額と残りしか出ないので、予算は足して求める
+const LEVELS = [['budget_type_total_expense', 'group'], ['large_category_expense', 'category'], ['total_expense', 'total']];
+export function budgetRows(raw) {
+  if (!raw.length) throw broken('今月の予算の表');
+  return raw.map((r) => {
+    const level = LEVELS.find(([cls]) => r.cls.split(/\s+/).includes(cls))?.[1];
+    const spent = yen(r.spent);
+    const remaining = yen(r.remaining);
+    if (!level || !r.name || spent === null || remaining === null) throw broken(`今月の予算の「${r.name}」の行`);
+    return { level, name: r.name, budget: spent + remaining, spent, remaining };
+  });
+}
+
+// 「予算の設定」のフォーム。1 つでも読めない値があれば止める（欠けた値のまま保存すると、その予算が消える）
+export function budgetSettings(raw) {
+  const income = yen(raw.income);
+  if (income === null || !raw.categories.length) throw broken('予算の設定');
+  return {
+    income,
+    categories: raw.categories.map((c) => {
+      const amount = yen(c.amount);
+      if (!/^\d+$/.test(c.id ?? '') || !c.name || amount === null) throw broken(`予算の設定の「${c.name}」の行`);
+      return { id: c.id, name: c.name, type: c.type, amount, lastMonth: yen(c.lastMonth) };
+    }),
+  };
+}
+
+// 変更の指定を、設定画面の今の値に当てる。大項目の名前が 1 つでも合わなければ、何も変えずに止める
+export function planBudget(settings, { income, budgets = [] }) {
+  const plan = [];
+  if (income !== undefined) plan.push({ id: null, name: '毎月の手取り収入', before: settings.income, amount: income });
+  for (const b of budgets) {
+    const c = settings.categories.find((x) => x.name === b.category);
+    if (!c) throw new Error(`「${b.category}」という大項目は予算の設定にありません（指定できるのは ${settings.categories.map((x) => x.name).join('、')}）`);
+    if (plan.some((p) => p.id === c.id)) throw new Error(`「${b.category}」が 2 回指定されています`);
+    plan.push({ id: c.id, name: c.name, before: c.amount, amount: b.amount });
+  }
+  if (!plan.length) throw new Error('変更する予算が指定されていません');
+  return plan;
+}
+
+// 入力した後のフォームの値を、指定どおりの値と突き合わせる。画面の JS が指定外の欄まで書き換えていたら、
+// 保存すると audit.log に元の額が残らないまま壊れるので、ずれた項目の名前を返して保存を止めさせる
+export function budgetDrift(before, after, plan) {
+  const want = (id, cur) => plan.find((p) => p.id === id)?.amount ?? cur;
+  return [
+    [null, '毎月の手取り収入', before.income, after.income],
+    ...before.categories.map((c) => [c.id, c.name, c.amount, after.categories.find((x) => x.id === c.id)?.amount]),
+  ].filter(([id, , cur, now]) => now !== want(id, cur)).map(([, name]) => name);
+}

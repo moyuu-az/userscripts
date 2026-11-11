@@ -1,15 +1,17 @@
-// Money Forward ME の入出金ページを、ログイン済みの Chrome（専用プロファイル）で操作する。
+// Money Forward ME の入出金と予算のページを、ログイン済みの Chrome（専用プロファイル）で操作する。
 // MF ME には公式の API がないので、画面の作り（クラス名・フォーム）に依存する。画面が変わったらここを直す。
 import { chromium } from 'playwright-core';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseHeaderMonth } from './lib.js';
+import { budgetDrift, budgetRows, budgetSettings, monthsAgo, parseHeaderMonth, planBudget } from './lib.js';
 
 export const HOME = path.join(os.homedir(), '.moneyforward-mcp');
 export const PROFILE_DIR = path.join(HOME, 'chrome-profile');
 const AUDIT_LOG = path.join(HOME, 'audit.log');
 const CF_URL = 'https://moneyforward.com/cf';
+const BUDGET_URL = 'https://moneyforward.com/spending_summaries';
+const BUDGET_EDIT_URL = 'https://moneyforward.com/spending_targets/edit';
 // カレンダー用の .fc-header-title もあり、月を移る途中で一瞬空になるので、一覧側の見出しを読む
 const HEADER = '.fc-header-title.in-out-header-title';
 const ROW = '#cf-detail-table tr.transaction_list';
@@ -47,14 +49,19 @@ export async function close() {
   if (p) await (await p.catch(() => null))?.close().catch(() => {});
 }
 
-async function openCf() {
+async function open(target) {
   const page = await getPage();
-  const res = await page.goto(CF_URL, { waitUntil: 'domcontentloaded' });
+  const res = await page.goto(target, { waitUntil: 'domcontentloaded' });
   if (res?.status() === 403) throw new Error('Money Forward ME にアクセスを拒否されました（403）。');
   const url = new URL(page.url());
-  if (url.hostname !== 'moneyforward.com' || !url.pathname.startsWith('/cf')) {
+  if (url.hostname !== 'moneyforward.com' || !url.pathname.startsWith(new URL(target).pathname)) {
     throw new Error('Money Forward ME にログインしていません。moneyforward-mcp で npm run login を実行してログインしてください。');
   }
+  return page;
+}
+
+async function openCf() {
+  const page = await open(CF_URL);
   // 見出しの要素は先にでき、期間の文字は後から JS で入る
   await page.waitForFunction((sel) => /\d{4}\/\d{1,2}\/\d{1,2}/.test(document.querySelector(sel)?.textContent ?? ''), HEADER);
   return page;
@@ -226,4 +233,84 @@ export async function setTransfer(month, id, partnerMonth, partnerId) {
   });
   audit({ op: 'set_transfer', month, id, partnerMonth, partnerId, result });
   return { id, partnerId, result };
+}
+
+// ---- 予算 ----
+
+const readProgress = (page) => page.evaluate(() => ({
+  period: document.querySelector('.date_range .msg')?.textContent.trim() ?? '',
+  rows: [...document.querySelectorAll('table.table tbody tr')].map((tr) => ({
+    cls: tr.className,
+    name: tr.querySelector('th')?.textContent.trim() ?? '',
+    spent: tr.querySelector('td.amount span')?.textContent ?? '',
+    remaining: tr.querySelector('td.remaining')?.textContent ?? '',
+  })),
+}));
+
+const readSettings = async (page) => budgetSettings(await page.evaluate(() => ({
+  income: document.querySelector('#spending_targets_income')?.value ?? null,
+  categories: [...document.querySelectorAll('form.budget_form tr.large_category')].map((tr) => ({
+    id: tr.dataset.id,
+    name: tr.querySelector('th')?.textContent.trim() ?? '',
+    type: tr.classList.contains('fixed') ? 'fixed' : 'variable',
+    amount: tr.querySelector('input.large_category_amount')?.value ?? '',
+    lastMonth: tr.querySelector('td.last_month')?.textContent ?? '',
+  })),
+})));
+
+// 月ごとの実績（使った金額・残り）と、毎月の予算の設定を読む。設定は月ごとには持てず、全部の月に共通
+export async function getBudget(month) {
+  let offset = month ? monthsAgo(month) : 0;
+  let page;
+  let progress;
+  // 期間は開始日の月で数えるので、月の開始日が 1 日でないと、暦の月から求めた offset_month が 1 か月ずれることがある。
+  // 開いた期間の月から 1 度だけ合わせ直し、それでも違えば止める（違う月の実績を黙って返さない）
+  for (let retry = false; ; retry = true) {
+    if (offset < 0) throw new Error(`${month} はまだ来ていないので、予算の実績がありません`);
+    page = await open(`${BUDGET_URL}?offset_month=${offset}`);
+    progress = await readProgress(page);
+    const got = parseHeaderMonth(progress.period);
+    if (!month || got === month) break;
+    if (retry || !got) throw new Error(`${month} の予算を開けませんでした（開いたのは ${progress.period || '期間が読めないページ'}）`);
+    const [y, m] = got.split('-').map(Number);
+    offset += monthsAgo(month, new Date(y, m - 1));
+  }
+  const rows = budgetRows(progress.rows);
+  page = await open(BUDGET_EDIT_URL);
+  return { period: progress.period, progress: rows, settings: await readSettings(page) };
+}
+
+// 「予算の設定」のフォームに額を入れて保存する。指定しなかった大項目は、画面に出ている今の額のまま送られる
+export async function setBudget(change) {
+  let page = await open(BUDGET_EDIT_URL);
+  const settings = await readSettings(page);
+  const plan = planBudget(settings, change);
+  const result = (after) => plan.map(({ id, ...p }) => {
+    const saved = id === null ? after.income : after.categories.find((c) => c.id === id)?.amount;
+    return { ...p, result: saved === p.amount ? 'ok' : 'not_saved' };
+  });
+  // 何も変わらない指定では保存しない（同じ指定をもう一度流しても書き込まない）
+  if (plan.every((p) => p.before === p.amount)) return plan.map(({ id, ...p }) => ({ ...p, result: 'unchanged' }));
+  for (const p of plan) await page.fill(p.id === null ? '#spending_targets_income' : `#spending_targets_amount_${p.id}`, String(p.amount));
+  // 送る前に、フォームに入っている値が指定どおりで、指定外の欄がそのままかを確かめる。ここで止めれば何も保存されない。
+  // change のハンドラは欄を離れたときに動くので、先に入力欄からフォーカスを外す（送信ボタンを押したときと同じ状態にする）
+  await page.evaluate(() => document.activeElement?.blur());
+  const drift = budgetDrift(settings, await readSettings(page), plan);
+  if (drift.length) throw new Error(`入力すると「${drift.join('、')}」が指定と違う額になったので、保存していません。画面の作りが変わった可能性があります。`);
+  let results;
+  try {
+    await Promise.all([
+      page.waitForResponse((r) => new URL(r.url()).pathname === '/spending_targets' && r.request().method() !== 'GET'),
+      page.click('form.budget_form input[name="commit"]'),
+    ]);
+    // 送れたかではなく、読み込み直して保存された値で判定する
+    page = await open(BUDGET_EDIT_URL);
+    results = result(await readSettings(page));
+  } catch (e) {
+    audit({ op: 'set_budget', plan, error: e.message });
+    throw new Error(`予算の変更が途中で止まりました。保存されたかどうかは get_budget で確かめてください。(${e.message})`);
+  }
+  // before を残すので、この記録から元の額に戻せる
+  audit({ op: 'set_budget', results });
+  return results;
 }
