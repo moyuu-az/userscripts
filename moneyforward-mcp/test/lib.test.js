@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { findDuplicates, parseHeaderMonth, monthsBetween, createQueue, yen, monthsAgo, budgetRows, budgetSettings, planBudget, budgetDrift } from '../lib.js';
+import { findDuplicates, parseHeaderMonth, monthsBetween, createQueue, yen, monthsAgo, budgetRows, budgetSettings, planBudget, budgetDrift, pickCategory, accountRows } from '../lib.js';
 
 let seq = 0;
 const row = (o) => ({ id: String(++seq), month: o.date.slice(0, 7).replace('/', '-'), content: '', target: '1', gray: false, ...o });
@@ -270,4 +270,48 @@ test('budgetDrift は指定外の欄が書き換わった・指定の額が入�
   const filled = structuredClone(before);
   filled.categories[0].amount = 1;
   assert.deepEqual(budgetDrift(before, filled, zero), []);
+});
+
+const menu = [
+  { id: '11', name: '食費', middles: [{ id: '105', name: '食費' }, { id: '42', name: '外食' }] },
+  { id: '20', name: '交通費', middles: [{ id: '96', name: '電車' }] },
+  { id: '0', name: '未分類', middles: [{ id: '0', name: '未分類' }] },
+];
+
+test('pickCategory は大項目と中項目の名前から id を選ぶ', () => {
+  assert.deepEqual(pickCategory(menu, '食費', '外食'), { largeId: '11', middleId: '42' });
+  // 大項目と同じ名前の中項目、id が 0 の未分類も選べる
+  assert.deepEqual(pickCategory(menu, '食費', '食費'), { largeId: '11', middleId: '105' });
+  assert.deepEqual(pickCategory(menu, '未分類', '未分類'), { largeId: '0', middleId: '0' });
+});
+
+test('pickCategory は知らない大項目・その大項目にない中項目を拒み、指定できる名前を示す', () => {
+  assert.throws(() => pickCategory(menu, '食', '外食'), /「食」という大項目はありません（指定できるのは 食費、交通費、未分類）/);
+  // 別の大項目にある中項目は選ばない
+  assert.throws(() => pickCategory(menu, '食費', '電車'), /「食費」に「電車」という中項目はありません（指定できるのは 食費、外食）/);
+});
+
+test('pickCategory は選択肢が空・id が数字でないときに止まる', () => {
+  assert.throws(() => pickCategory([], '食費', '外食'), /カテゴリの選択肢が読めません/);
+  assert.throws(() => pickCategory([{ id: '', name: '食費', middles: [] }], '食費', '外食'), /読めません/);
+  assert.throws(() => pickCategory([{ id: '11', name: '食費', middles: [{ id: 'x', name: '外食' }] }], '食費', '外食'), /読めません/);
+});
+
+test('accountRows は残高・登録日・最終取得日・更新状態を読む', () => {
+  assert.deepEqual(accountRows([
+    { name: 'A銀行', balance: ' 59,031円 ', dates: ['2023/04/17', '(11/11 20:45)'], status: '正常' },
+    { name: 'Bカード', balance: ' ', dates: ['2025/03/26', '(10/08 06:32)'], status: '設定エラー' },
+    { name: 'C通販', balance: '0円', dates: [], status: '正常' },
+  ]), [
+    { name: 'A銀行', balance: 59031, registered: '2023/04/17', lastFetched: '11/11 20:45', status: '正常' },
+    // 残高の出ない口座は 0 円ではなく null
+    { name: 'Bカード', balance: null, registered: '2025/03/26', lastFetched: '10/08 06:32', status: '設定エラー' },
+    { name: 'C通販', balance: 0, registered: null, lastFetched: null, status: '正常' },
+  ]);
+});
+
+test('accountRows は表が空・名前や更新状態が読めないときに止まる', () => {
+  assert.throws(() => accountRows([]), /登録済み金融機関の表が読めません/);
+  assert.throws(() => accountRows([{ name: '', balance: '1円', dates: [], status: '正常' }]), /読めません/);
+  assert.throws(() => accountRows([{ name: 'A銀行', balance: '1円', dates: [], status: '' }]), /「A銀行」の行が読めません/);
 });
