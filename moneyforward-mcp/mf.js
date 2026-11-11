@@ -189,7 +189,8 @@ const readMenu = (page, id) => page.evaluate(async (id) => {
 // 取引の大項目・中項目を変える。MF のメニューで中項目を選んだときと同じ更新を送る（計算対象は空にして送ると、サーバは変えない）
 export async function setCategory(month, ids, large, middle) {
   let page = await openCf();
-  const before = new Map((await readMonth(page, month)).map((r) => [r.id, r]));
+  const rows = new Map((await readMonth(page, month)).map((r) => [r.id, r]));
+  const before = Object.fromEntries(ids.map((id) => [id, rows.has(id) ? { large: rows.get(id).large, middle: rows.get(id).middle } : null]));
   // 収入と支出では選べるカテゴリが違う。行の種類ごとに選択肢を読み、名前が合わない種類が 1 つでもあれば、何も送らずに止める。
   // 振替の行にはカテゴリの欄がないので、種類を null にして送らない
   const kinds = await page.evaluate((ids) => Object.fromEntries(ids.map((id) => {
@@ -211,13 +212,14 @@ export async function setCategory(month, ids, large, middle) {
     page = await openCf();
     after = new Map((await readMonth(page, month)).map((r) => [r.id, r]));
   } catch (e) {
-    audit({ op: 'set_category', month, large, middle, ids, sent, error: e.message });
+    // やり直すと保存済みの行は新しいカテゴリを before として読むので、元のカテゴリはこの記録にしか残らない
+    audit({ op: 'set_category', month, large, middle, ids, before, sent, error: e.message });
     throw new Error(`カテゴリの変更が途中で止まりました。一部だけ保存されたかもしれません。同じ指定でもう一度実行すれば、そろえて確かめ直します。(${e.message})`);
   }
   // before を残すので、この記録から元のカテゴリに戻せる
   const results = ids.map((id) => ({
     id,
-    before: before.has(id) ? { large: before.get(id).large, middle: before.get(id).middle } : null,
+    before: before[id],
     result: sent[id] !== 'sent' ? sent[id] : after.get(id)?.large === large && after.get(id)?.middle === middle ? 'ok' : 'not_saved',
   }));
   audit({ op: 'set_category', month, large, middle, results });
