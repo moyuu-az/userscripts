@@ -33,7 +33,7 @@ claude mcp add moneyforward -- node /path/to/userscripts/moneyforward-mcp/server
 | `set_budget` | 毎月の手取り収入と、大項目ごとの予算を変える |
 | `get_accounts` | 連携している口座の残高・最終取得日・更新状態を読む |
 
-`set_calc_target`・`set_category`・`set_transfer`・`set_budget` は、ページを読み込み直して保存された値を確かめてから、結果を返します。どれも MF の画面から元に戻せます。取引を削除するツールはありません。変更した内容は `~/.moneyforward-mcp/audit.log` に 1 行ずつ記録します。
+`set_calc_target`・`set_category`・`set_transfer`・`set_budget` は、ページを読み込み直して保存された値を確かめてから、結果を返します。どれも MF の画面から元に戻せます。取引を削除するツールはありません。変更した内容は `~/.moneyforward-mcp/audit.log` に 1 行ずつ記録します。送る前に `"result":"started"` の行を書き、終わったら結果の行を書きます。`started` の行だけが残っていたら、その操作は途中で止まっています。
 
 ## カテゴリ
 

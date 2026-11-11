@@ -122,6 +122,9 @@ export async function listTransactions(months) {
   return rows;
 }
 
+// 書き換えるツールは、送る前にも result: 'started' の行を残す。送っている途中でプロセスが止められると、
+// 終わりの行を書けないので、started だけの行が「ここまで送ったかもしれない」ことと変更前の値の手がかりになる。
+// started が書けなければ例外で止まり、何も送らない
 function audit(entry) {
   fs.mkdirSync(HOME, { recursive: true });
   fs.appendFileSync(AUDIT_LOG, `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`);
@@ -150,6 +153,7 @@ export async function setCalcTarget(month, ids, target) {
   await gotoMonth(page, month);
   let sent;
   let after;
+  audit({ op: 'set_calc_target', month, target, ids, result: 'started' });
   try {
     sent = await putRows(page, Object.fromEntries(ids.map((id) => [id, { is_target: target ? 1 : 0, large_category_id: '', middle_category_id: '' }])));
 
@@ -204,6 +208,7 @@ export async function setCategory(month, ids, large, middle) {
   }
   let sent;
   let after;
+  audit({ op: 'set_category', month, large, middle, before, result: 'started' });
   try {
     sent = await putRows(page, Object.fromEntries(ids.map((id) => [id, kinds[id] === null ? null : {
       large_category_id: picked[kinds[id]].largeId, middle_category_id: picked[kinds[id]].middleId, is_target: '',
@@ -252,9 +257,13 @@ export async function setTransfer(month, id, partnerMonth, partnerId) {
       throw new Error(`振替の設定が「${label}」で止まりました。MF の画面で ${self.date} ${self.content} を確かめてください。(${e.message})`);
     }
   };
+  // 何も送らずに止める検証は started より前に置く（started だけが残ると「途中で止まった」と読めてしまう）
   if (!self.transfer) {
     const link = await page.getAttribute(`${row} .js-switch-transfer`, 'data-link');
     if (!link?.includes('change_type=enable_transfer')) throw new Error(`取引 ${id} を振替に切り替えるアイコンがありません`);
+  }
+  audit({ op: 'set_transfer', month, id, partnerMonth, partnerId, result: 'started' });
+  if (!self.transfer) {
     await step('振替に切り替え', async () => {
       await page.click(`${row} .js-switch-transfer`);
       const proceed = page.locator(`.js-transfer-switch-dialog-btn-proceed[href$="&id=${id}"]`);
@@ -357,6 +366,8 @@ export async function setBudget(change) {
   const drift = budgetDrift(settings, await readSettings(page), plan);
   if (drift.length) throw new Error(`入力すると「${drift.join('、')}」が指定と違う額になったので、保存していません。画面の作りが変わった可能性があります。`);
   let results;
+  // plan に変更前の額（before）が入っている
+  audit({ op: 'set_budget', plan, result: 'started' });
   try {
     await Promise.all([
       page.waitForResponse((r) => new URL(r.url()).pathname === '/spending_targets' && r.request().method() !== 'GET'),
