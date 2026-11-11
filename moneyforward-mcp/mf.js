@@ -30,9 +30,16 @@ export async function isLoggedIn() {
 let ctxPromise = null;
 async function getPage() {
   if (!ctxPromise) {
-    const p = launch().then((ctx) => {
+    const p = launch().then(async (ctx) => {
       // 利用者が Chrome を終了したら次の呼び出しで起動し直す。閉じた context を持ち続けると、サーバを再起動するまで全ツールが失敗する
       ctx.on('close', () => { if (ctxPromise === p) ctxPromise = null; });
+      // ヘッドレスにはできないので、ウィンドウを最小化して作業の邪魔にならないようにする（最小化しても操作と待機は動く）。
+      // 最小化できなくても、ウィンドウが見えるだけでツールは動くので、失敗は無視する
+      try {
+        const cdp = await ctx.newCDPSession(ctx.pages()[0] ?? await ctx.newPage());
+        const { windowId } = await cdp.send('Browser.getWindowForTarget');
+        await cdp.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'minimized' } });
+      } catch {}
       return ctx;
     }, (e) => {
       ctxPromise = null; // 失敗した起動を使い回さない（npm run login の画面が開いたままだとプロファイルが使えない）
