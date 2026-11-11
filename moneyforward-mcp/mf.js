@@ -4,7 +4,7 @@ import { chromium } from 'playwright-core';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { budgetRows, budgetSettings, monthsAgo, parseHeaderMonth, planBudget } from './lib.js';
+import { budgetDrift, budgetRows, budgetSettings, monthsAgo, parseHeaderMonth, planBudget } from './lib.js';
 
 export const HOME = path.join(os.homedir(), '.moneyforward-mcp');
 export const PROFILE_DIR = path.join(HOME, 'chrome-profile');
@@ -260,30 +260,45 @@ const readSettings = async (page) => budgetSettings(await page.evaluate(() => ({
 
 // 月ごとの実績（使った金額・残り）と、毎月の予算の設定を読む。設定は月ごとには持てず、全部の月に共通
 export async function getBudget(month) {
-  const offset = month ? monthsAgo(month) : 0;
-  if (offset < 0) throw new Error(`${month} はまだ来ていないので、予算の実績がありません`);
-  let page = await open(`${BUDGET_URL}?offset_month=${offset}`);
-  const { period, rows } = await readProgress(page);
-  // 月の開始日が 1 日でないと、offset_month が指す月と暦の月がずれる。違う月の実績を黙って返さない
-  if (month && parseHeaderMonth(period) !== month) throw new Error(`${month} の予算を開けませんでした（開いたのは ${period || '期間が読めないページ'}）`);
-  const progress = budgetRows(rows);
+  let offset = month ? monthsAgo(month) : 0;
+  let page;
+  let progress;
+  // 期間は開始日の月で数えるので、月の開始日が 1 日でないと、暦の月から求めた offset_month が 1 か月ずれることがある。
+  // 開いた期間の月から 1 度だけ合わせ直し、それでも違えば止める（違う月の実績を黙って返さない）
+  for (let retry = false; ; retry = true) {
+    if (offset < 0) throw new Error(`${month} はまだ来ていないので、予算の実績がありません`);
+    page = await open(`${BUDGET_URL}?offset_month=${offset}`);
+    progress = await readProgress(page);
+    const got = parseHeaderMonth(progress.period);
+    if (!month || got === month) break;
+    if (retry || !got) throw new Error(`${month} の予算を開けませんでした（開いたのは ${progress.period || '期間が読めないページ'}）`);
+    const [y, m] = got.split('-').map(Number);
+    offset += monthsAgo(month, new Date(y, m - 1));
+  }
+  const rows = budgetRows(progress.rows);
   page = await open(BUDGET_EDIT_URL);
-  return { period, progress, settings: await readSettings(page) };
+  return { period: progress.period, progress: rows, settings: await readSettings(page) };
 }
 
 // 「予算の設定」のフォームに額を入れて保存する。指定しなかった大項目は、画面に出ている今の額のまま送られる
 export async function setBudget(change) {
   let page = await open(BUDGET_EDIT_URL);
-  const plan = planBudget(await readSettings(page), change);
+  const settings = await readSettings(page);
+  const plan = planBudget(settings, change);
   const result = (after) => plan.map(({ id, ...p }) => {
     const saved = id === null ? after.income : after.categories.find((c) => c.id === id)?.amount;
     return { ...p, result: saved === p.amount ? 'ok' : 'not_saved' };
   });
   // 何も変わらない指定では保存しない（同じ指定をもう一度流しても書き込まない）
   if (plan.every((p) => p.before === p.amount)) return plan.map(({ id, ...p }) => ({ ...p, result: 'unchanged' }));
+  for (const p of plan) await page.fill(p.id === null ? '#spending_targets_income' : `#spending_targets_amount_${p.id}`, String(p.amount));
+  // 送る前に、フォームに入っている値が指定どおりで、指定外の欄がそのままかを確かめる。ここで止めれば何も保存されない。
+  // change のハンドラは欄を離れたときに動くので、先に入力欄からフォーカスを外す（送信ボタンを押したときと同じ状態にする）
+  await page.evaluate(() => document.activeElement?.blur());
+  const drift = budgetDrift(settings, await readSettings(page), plan);
+  if (drift.length) throw new Error(`入力すると「${drift.join('、')}」が指定と違う額になったので、保存していません。画面の作りが変わった可能性があります。`);
   let results;
   try {
-    for (const p of plan) await page.fill(p.id === null ? '#spending_targets_income' : `#spending_targets_amount_${p.id}`, String(p.amount));
     await Promise.all([
       page.waitForResponse((r) => new URL(r.url()).pathname === '/spending_targets' && r.request().method() !== 'GET'),
       page.click('form.budget_form input[name="commit"]'),

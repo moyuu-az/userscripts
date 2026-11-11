@@ -198,3 +198,13 @@ export function planBudget(settings, { income, budgets = [] }) {
   if (!plan.length) throw new Error('変更する予算が指定されていません');
   return plan;
 }
+
+// 入力した後のフォームの値を、指定どおりの値と突き合わせる。画面の JS が指定外の欄まで書き換えていたら、
+// 保存すると audit.log に元の額が残らないまま壊れるので、ずれた項目の名前を返して保存を止めさせる
+export function budgetDrift(before, after, plan) {
+  const want = (id, cur) => plan.find((p) => p.id === id)?.amount ?? cur;
+  return [
+    [null, '毎月の手取り収入', before.income, after.income],
+    ...before.categories.map((c) => [c.id, c.name, c.amount, after.categories.find((x) => x.id === c.id)?.amount]),
+  ].filter(([id, , cur, now]) => now !== want(id, cur)).map(([, name]) => name);
+}

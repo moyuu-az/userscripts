@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { findDuplicates, parseHeaderMonth, monthsBetween, createQueue, yen, monthsAgo, budgetRows, budgetSettings, planBudget } from '../lib.js';
+import { findDuplicates, parseHeaderMonth, monthsBetween, createQueue, yen, monthsAgo, budgetRows, budgetSettings, planBudget, budgetDrift } from '../lib.js';
 
 let seq = 0;
 const row = (o) => ({ id: String(++seq), month: o.date.slice(0, 7).replace('/', '-'), content: '', target: '1', gray: false, ...o });
@@ -228,4 +228,46 @@ test('planBudget は知らない大項目・重複・空の指定を拒む', () 
   assert.throws(() => planBudget(s, { budgets: [{ category: '食費', amount: 1 }, { category: '食費', amount: 2 }] }), /2 回/);
   assert.throws(() => planBudget(s, {}), /指定されていません/);
   assert.throws(() => planBudget(s, { budgets: [] }), /指定されていません/);
+});
+
+test('monthsAgo で、開いた期間の月から offset を合わせ直せる（月の開始日が 1 日でない設定）', () => {
+  // 開始日 25 日・今日 11/11 だと今の期間は 10/25 - 11/24 で、10 月と数える。2026-10 を求めて offset 1 を開くと 2026-09 が出る
+  const offset = monthsAgo('2026-10', new Date(2026, 10, 11));
+  assert.equal(offset + monthsAgo('2026-10', new Date(2026, 8)), 0);
+  // 年をまたぐ: 2026-01 を求めて 2025-12 が出たら、1 つ新しい側に戻す
+  assert.equal(monthsAgo('2026-01', new Date(2025, 11)), -1);
+  // 今の期間が 10 月と数えられているときに 2026-11 を求めると、合わせ直した offset は負（まだ来ていない）
+  assert.equal(monthsAgo('2026-11', new Date(2026, 10, 11)) + monthsAgo('2026-11', new Date(2026, 9)), -1);
+});
+
+test('budgetDrift は指定どおりに入り、指定外が変わっていなければ空を返す', () => {
+  const before = budgetSettings(rawSettings());
+  const plan = planBudget(before, { budgets: [{ category: '住宅', amount: 80000 }] });
+  const after = structuredClone(before);
+  after.categories[1].amount = 80000;
+  assert.deepEqual(budgetDrift(before, after, plan), []);
+  const incomePlan = planBudget(before, { income: 0 });
+  assert.deepEqual(budgetDrift(before, { ...before, income: 0 }, incomePlan), []);
+});
+
+test('budgetDrift は指定外の欄が書き換わった・指定の額が入っていない・大項目が消えたときに項目名を返す', () => {
+  const before = budgetSettings(rawSettings());
+  const plan = planBudget(before, { income: 400000 });
+  // 収入を変えたら画面の JS が大項目の予算まで配り直した
+  const recalculated = structuredClone(before);
+  recalculated.income = 400000;
+  recalculated.categories[0].amount = 45000;
+  assert.deepEqual(budgetDrift(before, recalculated, plan), ['食費']);
+  // 指定した額が入っていない（収入）
+  assert.deepEqual(budgetDrift(before, before, plan), ['毎月の手取り収入']);
+  // 指定外の大項目が読み直しで見つからない
+  const missing = structuredClone(before);
+  missing.income = 400000;
+  missing.categories.pop();
+  assert.deepEqual(budgetDrift(before, missing, plan), ['保険']);
+  // 0 円の予算が 0 のままなら変わっていない（0 を「値なし」と取り違えない）
+  const zero = planBudget(before, { budgets: [{ category: '保険', amount: 0 }, { category: '食費', amount: 1 }] });
+  const filled = structuredClone(before);
+  filled.categories[0].amount = 1;
+  assert.deepEqual(budgetDrift(before, filled, zero), []);
 });
