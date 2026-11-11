@@ -1,6 +1,6 @@
 # moneyforward-mcp
 
-Money Forward ME の入出金を読み、二重に数えられている取引を探して直すための、ローカルの MCP サーバです。MF ME には公式の API がないので、ログイン済みの Chrome を Playwright で操作します。
+Money Forward ME の入出金を読み、二重に数えられている取引を探して直すための、ローカルの MCP サーバです。予算の実績と設定も読み書きできます。MF ME には公式の API がないので、ログイン済みの Chrome を Playwright で操作します。
 
 ## 準備
 
@@ -28,8 +28,21 @@ claude mcp add moneyforward -- node /path/to/userscripts/moneyforward-mcp/server
 | `find_duplicates` | 二重に数えられている取引を探す。何も変えない |
 | `set_calc_target` | 取引を計算対象外（または計算対象）にする |
 | `set_transfer` | 取引を振替にし、相手側の入出金を振替先に結びつける |
+| `get_budget` | 指定した月（省くと今月）の予算の実績と、毎月の予算の設定を読む |
+| `set_budget` | 毎月の手取り収入と、大項目ごとの予算を変える |
 
-`set_calc_target` と `set_transfer` は、ページを読み込み直して保存された値を確かめてから、結果を返します。どちらも MF の画面から元に戻せます。取引を削除するツールはありません。変更した内容は `~/.moneyforward-mcp/audit.log` に 1 行ずつ記録します。
+`set_calc_target`・`set_transfer`・`set_budget` は、ページを読み込み直して保存された値を確かめてから、結果を返します。どれも MF の画面から元に戻せます。取引を削除するツールはありません。変更した内容は `~/.moneyforward-mcp/audit.log` に 1 行ずつ記録します。
+
+## 予算
+
+`get_budget` は、MF の「今月の予算」と「予算の設定」の 2 つのページを読みます。
+
+- `progress`: その月の予算・使った金額・残り。支出全体、変動費と固定費の小計、大項目の順に並びます。画面には使った金額と残りしか出ないので、予算は 2 つを足して求めています
+- `settings`: 毎月の手取り収入と、大項目ごとの予算・先月の実績
+
+`set_budget` には、大項目の名前と新しい額を渡します。指定しなかった大項目は変わりません。名前が 1 つでも設定画面にないと、何も変えずにエラーを返します。結果には変更前の額（`before`）が入り、`audit.log` にも残るので、同じツールで元の額に戻せます。
+
+MF の予算は月ごとには持てず、全部の月に共通です。予算を変えると、過去の月の「残り」も変わります。大項目を変動費と固定費に振り分ける「大項目の設定」は、このサーバでは変えられません。
 
 ## 重複とみなす条件
 
@@ -57,4 +70,4 @@ claude mcp add moneyforward -- node /path/to/userscripts/moneyforward-mcp/server
 npm test
 ```
 
-重複の判定（`lib.js`）だけをテストします。MF の画面を操作する部分（`mf.js`）は、実際のアカウントで動かして確かめています。
+重複の判定と、予算の値の読み取り・変更内容の検証（`lib.js`）だけをテストします。MF の画面を操作する部分（`mf.js`）は、実際のアカウントで動かして確かめています。

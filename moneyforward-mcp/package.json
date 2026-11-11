@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Money Forward ME の入出金を読み、重複を直すローカル MCP サーバ",
+  "description": "Money Forward ME の入出金と予算を読み、重複と予算を直すローカル MCP サーバ",
   "bin": {
     "moneyforward-mcp": "server.js"
   },

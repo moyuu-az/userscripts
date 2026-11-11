@@ -64,6 +64,32 @@ server.registerTool('set_transfer', {
   annotations: { destructiveHint: false, idempotentHint: true },
 }, ({ month: m, id: i, partnerMonth, partnerId }) => run(async () => json(await mf.setTransfer(m, i, partnerMonth ?? m, partnerId))));
 
+server.registerTool('get_budget', {
+  title: '予算を読む',
+  description: [
+    '予算の実績と設定を読む。month を省くと今月。',
+    'progress: その月の行ごとの予算（budget）・使った金額（spent）・残り（remaining）。level は total が支出全体、group が変動費・固定費の小計、category が大項目。',
+    'settings: 毎月の予算の設定。income は毎月の手取り収入、categories は大項目ごとの予算（amount）と先月の実績（lastMonth）。設定は全部の月に共通で、月ごとには持てない。',
+  ].join('\n'),
+  inputSchema: { month: month.optional() },
+  annotations: { readOnlyHint: true },
+}, ({ month: m }) => run(async () => json(await mf.getBudget(m))));
+
+const amount = z.number().int().min(0).max(99_999_999);
+server.registerTool('set_budget', {
+  title: '予算を変える',
+  description: [
+    '毎月の予算の設定を変える。income は毎月の手取り収入、budgets は大項目の名前（get_budget の settings.categories の name）と新しい額（円）。指定しなかった項目は変えない。',
+    '設定は全部の月に共通なので、過去の月の「残り」も変わる。変える前に、変更前後の額を利用者に見せて了承を得ること。',
+    '結果は読み込み直して確かめた値で返す（ok / not_saved / unchanged）。before が変更前の額で、同じツールで before の額を指定すれば元に戻せる。',
+  ].join('\n'),
+  inputSchema: {
+    income: amount.optional(),
+    budgets: z.array(z.object({ category: z.string().min(1).max(50), amount })).max(50).optional(),
+  },
+  annotations: { destructiveHint: false, idempotentHint: true },
+}, (change) => run(async () => json(await mf.setBudget(change))));
+
 const shutdown = async () => { await mf.close(); process.exit(0); };
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);

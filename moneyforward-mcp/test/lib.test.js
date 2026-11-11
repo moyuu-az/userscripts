@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { findDuplicates, parseHeaderMonth, monthsBetween, createQueue } from '../lib.js';
+import { findDuplicates, parseHeaderMonth, monthsBetween, createQueue, yen, monthsAgo, budgetRows, budgetSettings, planBudget } from '../lib.js';
 
 let seq = 0;
 const row = (o) => ({ id: String(++seq), month: o.date.slice(0, 7).replace('/', '-'), content: '', target: '1', gray: false, ...o });
@@ -130,4 +130,102 @@ test('すでに直した後は何も出さない（2 回流しても同じ操作
   const card = row({ date: '2026/10/12', amount: -3999, account: '三井住友カード', content: 'AMAZON.CO.JP', target: '0', gray: true });
   const a = row({ date: '2026/10/12', amount: -3999, account: 'Amazon.co.jp', content: 'モニターアーム' });
   assert.deepEqual(kinds([out, card, a]), []);
+});
+
+// ---- 予算 ----
+
+test('yen は桁区切りと負の額を読み、読めないときは null を返す', () => {
+  assert.equal(yen('154,688円'), 154688);
+  assert.equal(yen('\n -9,591円 '), -9591);
+  assert.equal(yen('0円'), 0);
+  assert.equal(yen('350000'), 350000);
+  assert.equal(yen('円'), null);
+  assert.equal(yen(''), null);
+  assert.equal(yen(undefined), null);
+});
+
+test('monthsAgo は今月を 0 とし、年をまたいで数える。先の月は負になる', () => {
+  const now = new Date(2026, 10, 11); // 2026-11
+  assert.equal(monthsAgo('2026-11', now), 0);
+  assert.equal(monthsAgo('2026-10', now), 1);
+  assert.equal(monthsAgo('2025-12', now), 11);
+  assert.equal(monthsAgo('2024-11', now), 24);
+  assert.equal(monthsAgo('2026-12', now), -1);
+  assert.equal(monthsAgo('2027-01', now), -2);
+  assert.equal(monthsAgo('2026-01', new Date(2026, 0, 1)), 0);
+});
+
+const rawRow = (cls, name, spent, remaining) => ({ cls, name, spent, remaining });
+
+test('budgetRows は予算を「使った金額 + 残り」で求め、行の種類を分ける', () => {
+  assert.deepEqual(budgetRows([
+    rawRow('total_expense', '支出全体', '154,688円', '176,916円'),
+    rawRow('budget_type_total_expense variable_type', '手元で管理するお金', '108,159円', '-9,591円'),
+    rawRow('large_category_expense', 'その他', '11,000円', '-7,432円'),
+    rawRow('large_category_expense', '保険', '0円', '0円'),
+  ]), [
+    { level: 'total', name: '支出全体', budget: 331604, spent: 154688, remaining: 176916 },
+    { level: 'group', name: '手元で管理するお金', budget: 98568, spent: 108159, remaining: -9591 },
+    { level: 'category', name: 'その他', budget: 3568, spent: 11000, remaining: -7432 },
+    { level: 'category', name: '保険', budget: 0, spent: 0, remaining: 0 },
+  ]);
+});
+
+test('budgetRows は表が空・知らない行・読めない額のときに止まる（0 円として返さない）', () => {
+  assert.throws(() => budgetRows([]), /画面の作り/);
+  assert.throws(() => budgetRows([rawRow('something_new', '食費', '1円', '1円')]), /食費/);
+  assert.throws(() => budgetRows([rawRow('large_category_expense', '食費', '', '1円')]), /食費/);
+  assert.throws(() => budgetRows([rawRow('large_category_expense', '食費', '1円', '円')]), /食費/);
+  assert.throws(() => budgetRows([rawRow('large_category_expense', '', '1円', '1円')]), /画面の作り/);
+});
+
+const rawSettings = () => ({
+  income: '350000',
+  categories: [
+    { id: '11', name: '食費', type: 'variable', amount: '40000', lastMonth: '164,485円' },
+    { id: '4', name: '住宅', type: 'fixed', amount: '71,536', lastMonth: '112,027円' },
+    { id: '8', name: '保険', type: 'fixed', amount: '0', lastMonth: '' },
+  ],
+});
+
+test('budgetSettings はフォームの値を数値にする', () => {
+  assert.deepEqual(budgetSettings(rawSettings()), {
+    income: 350000,
+    categories: [
+      { id: '11', name: '食費', type: 'variable', amount: 40000, lastMonth: 164485 },
+      { id: '4', name: '住宅', type: 'fixed', amount: 71536, lastMonth: 112027 },
+      { id: '8', name: '保険', type: 'fixed', amount: 0, lastMonth: null },
+    ],
+  });
+});
+
+test('budgetSettings は収入・大項目・額・id のどれかが読めないと止まる', () => {
+  const broken = (f) => { const s = rawSettings(); f(s); return () => budgetSettings(s); };
+  assert.throws(broken((s) => { s.income = null; }), /画面の作り/);
+  assert.throws(broken((s) => { s.income = ''; }), /画面の作り/);
+  assert.throws(broken((s) => { s.categories = []; }), /画面の作り/);
+  assert.throws(broken((s) => { s.categories[1].amount = ''; }), /住宅/);
+  assert.throws(broken((s) => { s.categories[1].id = undefined; }), /住宅/);
+  assert.throws(broken((s) => { s.categories[1].id = '4"]'; }), /住宅/);
+  assert.throws(broken((s) => { s.categories[1].name = ''; }), /画面の作り/);
+});
+
+test('planBudget は名前で大項目を選び、変更前の額を添える', () => {
+  const s = budgetSettings(rawSettings());
+  assert.deepEqual(planBudget(s, { income: 400000, budgets: [{ category: '住宅', amount: 80000 }, { category: '保険', amount: 0 }] }), [
+    { id: null, name: '毎月の手取り収入', before: 350000, amount: 400000 },
+    { id: '4', name: '住宅', before: 71536, amount: 80000 },
+    { id: '8', name: '保険', before: 0, amount: 0 },
+  ]);
+  assert.deepEqual(planBudget(s, { income: 0 }), [{ id: null, name: '毎月の手取り収入', before: 350000, amount: 0 }]);
+  assert.deepEqual(planBudget(s, { budgets: [{ category: '食費', amount: 1 }] }), [{ id: '11', name: '食費', before: 40000, amount: 1 }]);
+});
+
+test('planBudget は知らない大項目・重複・空の指定を拒む', () => {
+  const s = budgetSettings(rawSettings());
+  assert.throws(() => planBudget(s, { budgets: [{ category: '食費', amount: 1 }, { category: '外食', amount: 1 }] }), /「外食」.*食費、住宅、保険/);
+  assert.throws(() => planBudget(s, { budgets: [{ category: '食 費', amount: 1 }] }), /ありません/);
+  assert.throws(() => planBudget(s, { budgets: [{ category: '食費', amount: 1 }, { category: '食費', amount: 2 }] }), /2 回/);
+  assert.throws(() => planBudget(s, {}), /指定されていません/);
+  assert.throws(() => planBudget(s, { budgets: [] }), /指定されていません/);
 });
