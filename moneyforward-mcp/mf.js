@@ -257,10 +257,13 @@ export async function setTransfer(month, id, partnerMonth, partnerId) {
       throw new Error(`振替の設定が「${label}」で止まりました。MF の画面で ${self.date} ${self.content} を確かめてください。(${e.message})`);
     }
   };
-  audit({ op: 'set_transfer', month, id, partnerMonth, partnerId, result: 'started' });
+  // 何も送らずに止める検証は started より前に置く（started だけが残ると「途中で止まった」と読めてしまう）
   if (!self.transfer) {
     const link = await page.getAttribute(`${row} .js-switch-transfer`, 'data-link');
     if (!link?.includes('change_type=enable_transfer')) throw new Error(`取引 ${id} を振替に切り替えるアイコンがありません`);
+  }
+  audit({ op: 'set_transfer', month, id, partnerMonth, partnerId, result: 'started' });
+  if (!self.transfer) {
     await step('振替に切り替え', async () => {
       await page.click(`${row} .js-switch-transfer`);
       const proceed = page.locator(`.js-transfer-switch-dialog-btn-proceed[href$="&id=${id}"]`);
