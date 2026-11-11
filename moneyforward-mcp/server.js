@@ -53,6 +53,18 @@ server.registerTool('set_calc_target', {
   annotations: { destructiveHint: false, idempotentHint: true },
 }, ({ month: m, ids, target }) => run(async () => json(await mf.setCalcTarget(m, [...new Set(ids)], target))));
 
+const categoryName = z.string().min(1).max(50);
+server.registerTool('set_category', {
+  title: 'カテゴリを変える',
+  description: [
+    '取引の大項目（large）と中項目（middle）を変える。名前は list_transactions の large・middle と同じもの。ない名前を指定すると、何も変えずに、指定できる名前をエラーで返す。',
+    '収入と支出では選べるカテゴリが違う。振替の取引はカテゴリを持たないので not_found になる。',
+    '結果は読み込み直して確かめた値で返す（ok / not_saved / not_found）。before が変更前のカテゴリで、同じツールで before を指定すれば元に戻せる。',
+  ].join('\n'),
+  inputSchema: { month, ids: z.array(id).min(1).max(300), large: categoryName, middle: categoryName },
+  annotations: { destructiveHint: false, idempotentHint: true },
+}, ({ month: m, ids, large, middle }) => run(async () => json(await mf.setCategory(m, [...new Set(ids)], large, middle))));
+
 server.registerTool('set_transfer', {
   title: '振替にする',
   description: [
@@ -89,6 +101,12 @@ server.registerTool('set_budget', {
   },
   annotations: { destructiveHint: false, idempotentHint: true },
 }, (change) => run(async () => json(await mf.setBudget(change))));
+
+server.registerTool('get_accounts', {
+  title: '口座を読む',
+  description: '連携している口座（金融機関）ごとの残高（balance。残高の出ない口座は null）・登録日（registered）・最終取得日（lastFetched）・更新状態（status）を読む。status が「正常」でない口座は更新が止まっていて、lastFetched より後の取引は入出金に入っていない。',
+  annotations: { readOnlyHint: true },
+}, () => run(async () => json(await mf.getAccounts())));
 
 const shutdown = async () => { await mf.close(); process.exit(0); };
 process.on('SIGINT', shutdown);

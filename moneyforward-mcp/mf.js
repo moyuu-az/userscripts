@@ -4,7 +4,7 @@ import { chromium } from 'playwright-core';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { budgetDrift, budgetRows, budgetSettings, monthsAgo, parseHeaderMonth, planBudget } from './lib.js';
+import { accountRows, budgetDrift, budgetRows, budgetSettings, monthsAgo, parseHeaderMonth, pickCategory, planBudget } from './lib.js';
 
 export const HOME = path.join(os.homedir(), '.moneyforward-mcp');
 export const PROFILE_DIR = path.join(HOME, 'chrome-profile');
@@ -12,6 +12,7 @@ const AUDIT_LOG = path.join(HOME, 'audit.log');
 const CF_URL = 'https://moneyforward.com/cf';
 const BUDGET_URL = 'https://moneyforward.com/spending_summaries';
 const BUDGET_EDIT_URL = 'https://moneyforward.com/spending_targets/edit';
+const ACCOUNTS_URL = 'https://moneyforward.com/accounts';
 // カレンダー用の .fc-header-title もあり、月を移る途中で一瞬空になるので、一覧側の見出しを読む
 const HEADER = '.fc-header-title.in-out-header-title';
 const ROW = '#cf-detail-table tr.transaction_list';
@@ -126,29 +127,31 @@ function audit(entry) {
   fs.appendFileSync(AUDIT_LOG, `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`);
 }
 
-// MF の「計算対象」アイコンと同じ更新を送る（switchTargetIcon と同じく大・中項目は空にして送ると、サーバは変えない）。
-// アイコンをクリックすると応答のスクリプトが表全体を描き直して遅いので、応答は実行しない
+// 行のフォームの値を書き換えて、MF の画面と同じ更新を送る。edits は id ごとの { 欄の名前: 値 }。null の id は送らない。
+// 画面のアイコンやメニューをクリックすると応答のスクリプトが表全体を描き直して遅いので、応答は実行しない
+const putRows = (page, edits) => page.evaluate(async (edits) => {
+  const out = {};
+  for (const [id, fields] of Object.entries(edits)) {
+    const form = document.querySelector(`#js-transaction-${id} form`);
+    if (!fields || !form?.querySelector('#user_asset_act_is_target')) { out[id] = 'not_found'; continue; }
+    const $f = window.jQuery(form);
+    for (const [name, value] of Object.entries(fields)) $f.find(`#user_asset_act_${name}`).val(value);
+    out[id] = await new Promise((res) => {
+      window.jQuery.put(form.getAttribute('action'), $f.serialize(), null, 'text')
+        .done(() => res('sent')).fail((x) => res(`http_${x.status}`));
+    });
+  }
+  return out;
+}, edits);
+
+// MF の「計算対象」アイコンと同じ更新を送る（switchTargetIcon と同じく大・中項目は空にして送ると、サーバは変えない）
 export async function setCalcTarget(month, ids, target) {
   let page = await openCf();
   await gotoMonth(page, month);
   let sent;
   let after;
   try {
-    sent = await page.evaluate(async ({ ids, target }) => {
-      const out = {};
-      for (const id of ids) {
-        const form = document.querySelector(`#js-transaction-${id} form`);
-        if (!form?.querySelector('#user_asset_act_is_target')) { out[id] = 'not_found'; continue; }
-        const $f = window.jQuery(form);
-        $f.find('#user_asset_act_is_target').val(target ? 1 : 0);
-        $f.find('#user_asset_act_large_category_id, #user_asset_act_middle_category_id').val('');
-        out[id] = await new Promise((res) => {
-          window.jQuery.put(form.getAttribute('action'), $f.serialize(), null, 'text')
-            .done(() => res('sent')).fail((x) => res(`http_${x.status}`));
-        });
-      }
-      return out;
-    }, { ids, target });
+    sent = await putRows(page, Object.fromEntries(ids.map((id) => [id, { is_target: target ? 1 : 0, large_category_id: '', middle_category_id: '' }])));
 
     // 送れたかではなく、読み込み直して保存された値で判定する
     page = await openCf();
@@ -164,6 +167,60 @@ export async function setCalcTarget(month, ids, target) {
     result: sent[id] !== 'sent' ? sent[id] : after.get(id)?.target === want ? 'ok' : 'not_saved',
   }));
   audit({ op: 'set_calc_target', month, target, results });
+  return results;
+}
+
+// 行のカテゴリの選択肢は、ドロップダウンを開いたときに初めて作られる。開いて読み、閉じる
+const readMenu = (page, id) => page.evaluate(async (id) => {
+  const tr = document.querySelector(`#js-transaction-${id}`);
+  const toggle = tr.querySelector('.v_l_ctg');
+  toggle.click();
+  let menu;
+  for (let i = 0; i < 50 && !(menu = tr.querySelector('ul.main_menu')); i++) await new Promise((r) => setTimeout(r, 100));
+  const out = [...(menu?.querySelectorAll(':scope > li > a.l_c_name') ?? [])].map((a) => ({
+    id: a.id,
+    name: a.textContent.trim(),
+    middles: [...a.parentElement.querySelectorAll('a.m_c_name')].map((m) => ({ id: m.id, name: m.textContent.trim() })),
+  }));
+  toggle.click();
+  return out;
+}, id);
+
+// 取引の大項目・中項目を変える。MF のメニューで中項目を選んだときと同じ更新を送る（計算対象は空にして送ると、サーバは変えない）
+export async function setCategory(month, ids, large, middle) {
+  let page = await openCf();
+  const before = new Map((await readMonth(page, month)).map((r) => [r.id, r]));
+  // 収入と支出では選べるカテゴリが違う。行の種類ごとに選択肢を読み、名前が合わない種類が 1 つでもあれば、何も送らずに止める。
+  // 振替の行にはカテゴリの欄がないので、種類を null にして送らない
+  const kinds = await page.evaluate((ids) => Object.fromEntries(ids.map((id) => {
+    const tr = document.querySelector(`#js-transaction-${id}`);
+    return [id, tr?.querySelector('.v_l_ctg') ? tr.querySelector('#user_asset_act_is_income')?.value ?? null : null];
+  })), ids);
+  const picked = {};
+  for (const id of ids) {
+    const k = kinds[id];
+    if (k !== null && !(k in picked)) picked[k] = pickCategory(await readMenu(page, id), large, middle);
+  }
+  let sent;
+  let after;
+  try {
+    sent = await putRows(page, Object.fromEntries(ids.map((id) => [id, kinds[id] === null ? null : {
+      large_category_id: picked[kinds[id]].largeId, middle_category_id: picked[kinds[id]].middleId, is_target: '',
+    }])));
+    // 送れたかではなく、読み込み直して保存された値で判定する
+    page = await openCf();
+    after = new Map((await readMonth(page, month)).map((r) => [r.id, r]));
+  } catch (e) {
+    audit({ op: 'set_category', month, large, middle, ids, sent, error: e.message });
+    throw new Error(`カテゴリの変更が途中で止まりました。一部だけ保存されたかもしれません。同じ指定でもう一度実行すれば、そろえて確かめ直します。(${e.message})`);
+  }
+  // before を残すので、この記録から元のカテゴリに戻せる
+  const results = ids.map((id) => ({
+    id,
+    before: before.has(id) ? { large: before.get(id).large, middle: before.get(id).middle } : null,
+    result: sent[id] !== 'sent' ? sent[id] : after.get(id)?.large === large && after.get(id)?.middle === middle ? 'ok' : 'not_saved',
+  }));
+  audit({ op: 'set_category', month, large, middle, results });
   return results;
 }
 
@@ -313,4 +370,18 @@ export async function setBudget(change) {
   // before を残すので、この記録から元の額に戻せる
   audit({ op: 'set_budget', results });
   return results;
+}
+
+// ---- 口座 ----
+
+// 連携している口座の残高と、更新の状態を読む。更新が止まっている口座の取引は入出金に入ってこない
+export async function getAccounts() {
+  const page = await open(ACCOUNTS_URL);
+  return accountRows(await page.evaluate(() => [...document.querySelectorAll('#account-table tr[id]')].map((tr) => ({
+    name: tr.querySelector('td.service a')?.textContent.trim() ?? '',
+    balance: tr.querySelector('td.number')?.textContent ?? '',
+    dates: [...tr.querySelectorAll('td.created p')].map((p) => p.textContent.trim()),
+    // 更新中だけ出す「更新中」の文字が隠れて入っているので、見えている文字だけを読む
+    status: tr.children[3]?.innerText.trim() ?? '',
+  }))));
 }

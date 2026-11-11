@@ -208,3 +208,26 @@ export function budgetDrift(before, after, plan) {
     ...before.categories.map((c) => [c.id, c.name, c.amount, after.categories.find((x) => x.id === c.id)?.amount]),
   ].filter(([id, , cur, now]) => now !== want(id, cur)).map(([, name]) => name);
 }
+
+// ---- カテゴリ ----
+
+// 行のドロップダウンから読んだ選択肢に、大項目・中項目の名前を当てる。id はそのまま MF に送るので、数字でなければ止める
+export function pickCategory(menu, large, middle) {
+  if (!menu.length || menu.some((l) => !/^\d+$/.test(l.id) || l.middles.some((m) => !/^\d+$/.test(m.id)))) throw broken('カテゴリの選択肢');
+  const l = menu.find((x) => x.name === large);
+  if (!l) throw new Error(`「${large}」という大項目はありません（指定できるのは ${menu.map((x) => x.name).join('、')}）`);
+  const m = l.middles.find((x) => x.name === middle);
+  if (!m) throw new Error(`「${large}」に「${middle}」という中項目はありません（指定できるのは ${l.middles.map((x) => x.name).join('、')}）`);
+  return { largeId: l.id, middleId: m.id };
+}
+
+// ---- 口座 ----
+
+// 「登録済み金融機関」の表。カードのように残高の出ない口座は balance を null にする（0 円と取り違えない）
+export function accountRows(raw) {
+  if (!raw.length) throw broken('登録済み金融機関の表');
+  return raw.map((r) => {
+    if (!r.name || !r.status) throw broken(`登録済み金融機関の「${r.name}」の行`);
+    return { name: r.name, balance: yen(r.balance), registered: r.dates[0] ?? null, lastFetched: r.dates[1]?.replace(/[()]/g, '') ?? null, status: r.status };
+  });
+}
