@@ -5,7 +5,7 @@ userscript を 1 つずつ最上位のディレクトリに分けて置いてい
 | ディレクトリ | 対象のサイト |
 | --- | --- |
 | [moneyforward-me](moneyforward-me/) | Money Forward ME（家計簿） |
-| [moneyforward-mcp](moneyforward-mcp/) | Money Forward ME の重複を直すローカルの MCP サーバ（userscript ではありません） |
+| [moneyforward-mcp](moneyforward-mcp/) | Money Forward ME の入出金・予算・口座を読み、重複・カテゴリ・予算を直すローカルの MCP サーバ（userscript ではありません） |
 
 ## テスト
 
